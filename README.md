@@ -30,6 +30,7 @@ Model weights, datasets and generated runs are intentionally excluded from Git. 
 
 ```text
 TrainingModel/
+├── .github/workflows/tests.yml
 ├── configs/
 │   ├── autolabel.toml
 │   ├── ball_tracking.toml
@@ -42,14 +43,24 @@ TrainingModel/
 │   ├── autolabel.py
 │   ├── ball_tracker.py
 │   ├── CVAT_analysis.py
+│   ├── extract_ball_failures.py
 │   ├── flatten_dataset.py
 │   ├── inference.py
 │   ├── rename.py
 │   └── split_dataset.py
+├── tests/
+│   ├── test_dataset_paths.py
+│   ├── test_hard_cases.py
+│   └── test_tracking_metrics.py
+├── tracking/
+│   ├── __init__.py
+│   ├── hard_cases.py
+│   └── metrics.py
 ├── training/
 │   ├── __init__.py
 │   ├── common.py
 │   └── train.py
+├── CHANGELOG.md
 ├── dataset.yaml
 ├── requirements.txt
 └── README.md
@@ -109,12 +120,50 @@ Defaults live in `configs/ball_tracking.toml`. Output is written under:
 ```text
 runs/ball_tracking/<video_name>/
 ├── tracked.mp4
+├── tracking_report.json
 └── trajectory.csv
 ```
 
-Each trajectory row is marked as `detected`, `predicted` or `lost`. Predicted positions are intentionally limited to a short configurable gap and are not treated as real detector outputs. This gives a way to measure how much temporal information improves ball continuity before deciding whether a new detector version is necessary.
+Each trajectory row is marked as `detected`, `predicted` or `lost`. Predicted positions are intentionally limited to a short configurable gap and are not treated as real detector outputs.
 
-## 3. Model configuration and versioning
+`tracking_report.json` summarizes:
+
+- total frames;
+- detected, predicted and lost frame counts/ratios;
+- continuity ratio (`detected + predicted`);
+- mean detector confidence;
+- longest predicted streak;
+- longest lost streak;
+- longest continuous tracked sequence.
+
+These metrics are intended to measure whether temporal tracking improves ball continuity enough before investing in a new detector version.
+
+## 3. Extract ball hard cases
+
+After running the tracker, extract representative failure frames from the original video:
+
+```bash
+python3 scripts/extract_ball_failures.py /path/to/game.mp4
+```
+
+The extractor reads the corresponding `trajectory.csv` and samples frames for four reasons:
+
+- `predicted`: detector missed the ball and the tracker filled the gap;
+- `lost`: the tracker could no longer maintain the ball trajectory;
+- `low_confidence`: the detector found a ball below the review threshold;
+- `large_jump`: the tracked center moved an unusually large distance between observations.
+
+Outputs are written to:
+
+```text
+runs/hard_cases/<video_name>/
+├── frames/
+└── manifest.csv
+```
+
+Sampling limits, minimum spacing and thresholds live in `configs/ball_tracking.toml`. The intent is to build a compact review set of real product failures that can later inform whether a v1.1.0 dataset is justified.
+
+## 4. Model configuration and versioning
 
 `configs/model.toml` is the source of truth for the **promoted/current** model:
 
@@ -131,7 +180,7 @@ Project convention for model versions:
 
 A candidate checkpoint is not promoted merely because training completes. Evaluate it first, then update `configs/model.toml` only after deciding that it replaces the current model.
 
-## 4. Prepare new data
+## 5. Prepare new data
 
 The existing helper scripts are kept for the current data-preparation workflow.
 
@@ -171,7 +220,7 @@ python3 scripts/CVAT_analysis.py
 
 This is intentionally a different workflow: frames with no retained detections are moved to `discarded_frames`. Use it only when that destructive behaviour is desired.
 
-## 5. Build the current train/validation dataset
+## 6. Build the current train/validation dataset
 
 ```bash
 python3 scripts/split_dataset.py
@@ -191,7 +240,7 @@ dataset/
     └── val/
 ```
 
-## 6. Audit the dataset before training
+## 7. Audit the dataset before training
 
 Run:
 
@@ -218,7 +267,7 @@ runs/audit/dataset_audit.json
 
 The command exits with a non-zero status when structural/label issues are found.
 
-## 7. Evaluate a model
+## 8. Evaluate a model
 
 Evaluate the current promoted model on validation data:
 
@@ -240,7 +289,19 @@ A `test` split can be used later if/when `dataset.yaml` defines one:
 python3 evaluation/evaluate.py --split test
 ```
 
-## 8. Fine-tune a new version
+## 9. Run tests
+
+The lightweight test suite does not require model weights, videos or a dataset:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Tests currently cover tracking metrics, hard-case classification and portable dataset YAML path resolution.
+
+GitHub Actions runs Python compilation and these tests automatically on pushes to `main` and on pull requests. It intentionally does not run YOLO inference, training or GPU/MPS workloads.
+
+## 10. Fine-tune a new version
 
 `training/train.py` exists only for creating a **new model iteration**. It is not needed for inference with v1.0.0.
 
@@ -277,6 +338,10 @@ python3 -c "import torch; print(torch.backends.mps.is_available())"
 ```
 
 You can override device selection in inference/evaluation/tracking with `--device`, and training defaults can be changed in `configs/train.toml`.
+
+## Changelog
+
+Project and pipeline changes are tracked in `CHANGELOG.md`. Model v1.0.0 remains the current promoted detector until product evidence justifies another trained version.
 
 ## Decisions intentionally still open
 
