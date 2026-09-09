@@ -1,25 +1,21 @@
-cat > .gitignore <<'EOF'
 .DS_Store
 __pycache__/
 *.pyc
 .venv/
 venv/
 
-# Datasets
+# Datasets and raw inputs
 dataset/
 dataset_1/
 dataset_1.1/
 get_images/
+modelv0.2/
 
-# Training outputs
+# Generated outputs
 runs/
 
 # Models / weights
 weights/
-modelv0.2/
-
-# Common ML weights
 *.pt
 *.pth
 *.onnx
-EOF
