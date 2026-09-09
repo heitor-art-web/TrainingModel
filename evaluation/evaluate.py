@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     model_config = load_model_config()
-    version = model_config["version"]
+    configured_version = model_config["version"]
     weights = resolve_weights(args.weights)
 
     if not weights.exists():
@@ -61,7 +61,7 @@ def main() -> None:
     runtime_dataset = materialize_dataset_yaml(args.dataset)
     device = select_device(args.device)
     output_project = PROJECT_ROOT / "runs" / "evaluation"
-    run_name = f"model_v{version}_{args.split}"
+    run_name = f"{weights.stem}_{args.split}"
 
     model = YOLO(str(weights))
 
@@ -80,7 +80,8 @@ def main() -> None:
         runtime_dataset.unlink(missing_ok=True)
 
     summary = {
-        "configured_model_version": version,
+        "configured_promoted_model_version": configured_version,
+        "checkpoint": weights.name,
         "weights": str(weights),
         "split": args.split,
         "imgsz": args.imgsz,
