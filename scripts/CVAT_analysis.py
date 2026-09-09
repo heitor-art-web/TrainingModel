@@ -1,6 +1,9 @@
+from __future__ import annotations
+
+import argparse
 from pathlib import Path
 import shutil
-import time
+import tomllib
 
 import torch
 from PIL import Image
@@ -8,84 +11,124 @@ from tqdm import tqdm
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ROOT = PROJECT_ROOT / "modelv0.2"
-FRAME_DIR = ROOT / "frames"
-LABEL_DIR = ROOT / "labels"
-DISCARDED_DIR = ROOT / "discarded_frames"
 
-LABEL_DIR.mkdir(parents=True, exist_ok=True)
-DISCARDED_DIR.mkdir(parents=True, exist_ok=True)
 
-if torch.cuda.is_available():
-    DEVICE = "cuda"
-elif torch.backends.mps.is_available():
-    DEVICE = "mps"
-else:
-    DEVICE = "cpu"
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Legacy frame auto-label helper. Unlike autolabel.py, this moves frames "
+            "with no retained detections into discarded_frames."
+        )
+    )
+    parser.add_argument("--root", default="modelv0.2")
+    parser.add_argument("--config", default="configs/autolabel.toml")
+    parser.add_argument("--device", default="auto")
+    return parser.parse_args()
 
-CLASS_MAPPING = {
-    "basketball": 0,
-    "basketball player": 1,
-    "referee": 2,
-    "backboard": 3,
-    "rim": 4,
-}
-TEXT_PROMPT = " . ".join(CLASS_MAPPING.keys()) + " ."
 
-processor = AutoProcessor.from_pretrained("IDEA-Research/grounding-dino-base")
-model = AutoModelForZeroShotObjectDetection.from_pretrained(
-    "IDEA-Research/grounding-dino-base"
-).to(DEVICE).eval()
+def resolve(value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path.resolve()
 
-images = [
-    file for file in FRAME_DIR.iterdir()
-    if file.suffix.lower() in (".jpg", ".jpeg", ".png")
-]
 
-start = time.time()
+def choose_device(preferred: str) -> str:
+    if preferred != "auto":
+        return preferred
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
-for i, img_path in enumerate(tqdm(images), start=1):
-    txt_path = LABEL_DIR / f"{img_path.stem}.txt"
 
-    if txt_path.exists():
-        continue
+def main() -> None:
+    args = parse_args()
+    root = resolve(args.root)
+    config_path = resolve(args.config)
+    with config_path.open("rb") as file:
+        config = tomllib.load(file)
 
-    img = Image.open(img_path).convert("RGB")
-    width, height = img.size
-    inputs = processor(images=img, text=TEXT_PROMPT, return_tensors="pt").to(DEVICE)
+    frame_dir = root / "frames"
+    label_dir = root / "labels"
+    discarded_dir = root / "discarded_frames"
+    label_dir.mkdir(parents=True, exist_ok=True)
+    discarded_dir.mkdir(parents=True, exist_ok=True)
 
-    with torch.no_grad():
-        outputs = model(**inputs)
+    if not frame_dir.exists():
+        raise FileNotFoundError(f"Frame directory not found: {frame_dir}")
 
-    results = processor.post_process_grounded_object_detection(
-        outputs,
-        threshold=0.35,
-        text_threshold=0.25,
-        target_sizes=[(height, width)],
-    )[0]
+    class_mapping = {str(name): int(class_id) for name, class_id in config["class_mapping"].items()}
+    text_prompt = " . ".join(class_mapping.keys()) + " ."
+    device = choose_device(args.device)
 
-    kept = False
-    with txt_path.open("w") as label_file:
-        for box, label in zip(results["boxes"], results["labels"]):
-            label = label.lower().strip()
-            if label not in CLASS_MAPPING:
+    processor = AutoProcessor.from_pretrained(config["model"])
+    model = AutoModelForZeroShotObjectDetection.from_pretrained(config["model"]).to(device).eval()
+
+    images = sorted(
+        path
+        for path in frame_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
+    )
+
+    moved = 0
+    labelled = 0
+    skipped = 0
+
+    for image_path in tqdm(images, desc="CVAT frame auto-label"):
+        label_path = label_dir / f"{image_path.stem}.txt"
+        if label_path.exists():
+            skipped += 1
+            continue
+
+        image = Image.open(image_path).convert("RGB")
+        width, height = image.size
+        inputs = processor(images=image, text=text_prompt, return_tensors="pt").to(device)
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        result = processor.post_process_grounded_object_detection(
+            outputs,
+            threshold=float(config["box_threshold"]),
+            text_threshold=float(config["text_threshold"]),
+            target_sizes=[(height, width)],
+        )[0]
+
+        lines: list[str] = []
+        for box, label in zip(result["boxes"], result["labels"]):
+            detected = str(label).lower().strip()
+            if detected not in class_mapping:
                 continue
 
-            kept = True
             xmin, ymin, xmax, ymax = box.tolist()
+            xmin = max(0.0, min(float(width), xmin))
+            xmax = max(0.0, min(float(width), xmax))
+            ymin = max(0.0, min(float(height), ymin))
+            ymax = max(0.0, min(float(height), ymax))
+            if xmax <= xmin or ymax <= ymin:
+                continue
+
             xc = ((xmin + xmax) / 2) / width
             yc = ((ymin + ymax) / 2) / height
             bw = (xmax - xmin) / width
             bh = (ymax - ymin) / height
-            label_file.write(
-                f"{CLASS_MAPPING[label]} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}\n"
+            lines.append(
+                f"{class_mapping[detected]} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}"
             )
 
-    if not kept:
-        txt_path.unlink()
-        shutil.move(str(img_path), str(DISCARDED_DIR / img_path.name))
+        if lines:
+            label_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            labelled += 1
+        else:
+            shutil.move(str(image_path), str(discarded_dir / image_path.name))
+            moved += 1
 
-    if i % 100 == 0:
-        avg = (time.time() - start) / i
-        eta = (len(images) - i) * avg / 60
-        print(f"ETA: {eta:.1f} min")
+    print(f"Labelled: {labelled}")
+    print(f"Skipped existing labels: {skipped}")
+    print(f"Moved to discarded_frames: {moved}")
+
+
+if __name__ == "__main__":
+    main()
