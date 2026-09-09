@@ -1,0 +1,6 @@
+ultralytics
+transformers
+torch
+torchvision
+Pillow
+tqdm
