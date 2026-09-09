@@ -12,7 +12,7 @@ Its default local checkpoint path is configured in `configs/model.toml`:
 runs/detect/yolo26b/weights/model_v1.0.0.pt
 ```
 
-Model weights, datasets and generated runs are intentionally excluded from Git. A cloned repository therefore contains the code/configuration, but you must copy the required `.pt` file and dataset to the machine where they are needed.
+Model weights, datasets, local source videos and generated runs are intentionally excluded from Git. A cloned repository therefore contains the code/configuration, but you must copy the required `.pt` file, dataset and any source footage to the machine where they are needed.
 
 ## Classes
 
@@ -30,7 +30,6 @@ Model weights, datasets and generated runs are intentionally excluded from Git. 
 
 ```text
 TrainingModel/
-├── .github/workflows/tests.yml
 ├── configs/
 │   ├── autolabel.toml
 │   ├── ball_tracking.toml
@@ -49,21 +48,31 @@ TrainingModel/
 │   ├── rename.py
 │   └── split_dataset.py
 ├── tests/
-│   ├── test_dataset_paths.py
-│   ├── test_hard_cases.py
-│   └── test_tracking_metrics.py
 ├── tracking/
-│   ├── __init__.py
-│   ├── hard_cases.py
-│   └── metrics.py
 ├── training/
 │   ├── __init__.py
 │   ├── common.py
 │   └── train.py
+├── videos/                 # local only; ignored by Git
 ├── CHANGELOG.md
 ├── dataset.yaml
 ├── requirements.txt
 └── README.md
+```
+
+The `videos/` directory is the standard location for local game footage used during inference, tracking and hard-case extraction. It is ignored by Git so large video files are never pushed to the repository.
+
+Create it locally after cloning:
+
+```bash
+mkdir -p videos
+```
+
+Example:
+
+```text
+videos/
+└── game.mp4
 ```
 
 ## Setup
@@ -84,15 +93,15 @@ Training is **not required** to use `model_v1.0.0.pt`.
 Run inference on an image, video, directory or supported URL/source:
 
 ```bash
-python3 scripts/inference.py /path/to/video.mp4
+python3 scripts/inference.py videos/game.mp4
 ```
 
 Useful options:
 
 ```bash
 python3 scripts/inference.py /path/to/image.jpg --conf 0.35
-python3 scripts/inference.py /path/to/video.mp4 --no-save
-python3 scripts/inference.py /path/to/video.mp4 --weights /path/to/another_model.pt
+python3 scripts/inference.py videos/game.mp4 --no-save
+python3 scripts/inference.py videos/game.mp4 --weights /path/to/another_model.pt
 ```
 
 Default confidence, IoU and image size are defined in `configs/model.toml`. Annotated outputs are saved under `runs/inference/` unless `--no-save` is used.
@@ -101,18 +110,18 @@ Default confidence, IoU and image size are defined in `configs/model.toml`. Anno
 
 For basketball-specific video analysis, `scripts/ball_tracker.py` combines the current YOLO detector with temporal tracking. The detector remains unchanged; the tracker associates ball detections between frames, estimates velocity and predicts short gaps when the ball is temporarily missed because of blur or occlusion.
 
-Run:
+Place local game footage under `videos/` and run:
 
 ```bash
-python3 scripts/ball_tracker.py /path/to/game.mp4
+python3 scripts/ball_tracker.py videos/game.mp4
 ```
 
 Useful options:
 
 ```bash
-python3 scripts/ball_tracker.py /path/to/game.mp4 --no-video
-python3 scripts/ball_tracker.py /path/to/game.mp4 --max-gap 8
-python3 scripts/ball_tracker.py /path/to/game.mp4 --weights /path/to/another_model.pt
+python3 scripts/ball_tracker.py videos/game.mp4 --no-video
+python3 scripts/ball_tracker.py videos/game.mp4 --max-gap 8
+python3 scripts/ball_tracker.py videos/game.mp4 --weights /path/to/another_model.pt
 ```
 
 Defaults live in `configs/ball_tracking.toml`. Output is written under:
@@ -124,46 +133,19 @@ runs/ball_tracking/<video_name>/
 └── trajectory.csv
 ```
 
-Each trajectory row is marked as `detected`, `predicted` or `lost`. Predicted positions are intentionally limited to a short configurable gap and are not treated as real detector outputs.
+Each trajectory row is marked as `detected`, `predicted` or `lost`. Predicted positions are intentionally limited to a short configurable gap and are not treated as real detector outputs. This gives a way to measure how much temporal information improves ball continuity before deciding whether a new detector version is necessary.
 
-`tracking_report.json` summarizes:
+### Extract hard cases
 
-- total frames;
-- detected, predicted and lost frame counts/ratios;
-- continuity ratio (`detected + predicted`);
-- mean detector confidence;
-- longest predicted streak;
-- longest lost streak;
-- longest continuous tracked sequence.
-
-These metrics are intended to measure whether temporal tracking improves ball continuity enough before investing in a new detector version.
-
-## 3. Extract ball hard cases
-
-After running the tracker, extract representative failure frames from the original video:
+After running the tracker, extract representative problem frames with:
 
 ```bash
-python3 scripts/extract_ball_failures.py /path/to/game.mp4
+python3 scripts/extract_ball_failures.py videos/game.mp4
 ```
 
-The extractor reads the corresponding `trajectory.csv` and samples frames for four reasons:
+The extractor samples frames such as predicted gaps, lost tracking, low-confidence detections and large trajectory jumps. Outputs are written under `runs/hard_cases/<video_name>/` for later review or dataset construction.
 
-- `predicted`: detector missed the ball and the tracker filled the gap;
-- `lost`: the tracker could no longer maintain the ball trajectory;
-- `low_confidence`: the detector found a ball below the review threshold;
-- `large_jump`: the tracked center moved an unusually large distance between observations.
-
-Outputs are written to:
-
-```text
-runs/hard_cases/<video_name>/
-├── frames/
-└── manifest.csv
-```
-
-Sampling limits, minimum spacing and thresholds live in `configs/ball_tracking.toml`. The intent is to build a compact review set of real product failures that can later inform whether a v1.1.0 dataset is justified.
-
-## 4. Model configuration and versioning
+## 3. Model configuration and versioning
 
 `configs/model.toml` is the source of truth for the **promoted/current** model:
 
@@ -180,7 +162,7 @@ Project convention for model versions:
 
 A candidate checkpoint is not promoted merely because training completes. Evaluate it first, then update `configs/model.toml` only after deciding that it replaces the current model.
 
-## 5. Prepare new data
+## 4. Prepare new data
 
 The existing helper scripts are kept for the current data-preparation workflow.
 
@@ -220,7 +202,7 @@ python3 scripts/CVAT_analysis.py
 
 This is intentionally a different workflow: frames with no retained detections are moved to `discarded_frames`. Use it only when that destructive behaviour is desired.
 
-## 6. Build the current train/validation dataset
+## 5. Build the current train/validation dataset
 
 ```bash
 python3 scripts/split_dataset.py
@@ -240,7 +222,7 @@ dataset/
     └── val/
 ```
 
-## 7. Audit the dataset before training
+## 6. Audit the dataset before training
 
 Run:
 
@@ -267,7 +249,7 @@ runs/audit/dataset_audit.json
 
 The command exits with a non-zero status when structural/label issues are found.
 
-## 8. Evaluate a model
+## 7. Evaluate a model
 
 Evaluate the current promoted model on validation data:
 
@@ -289,19 +271,7 @@ A `test` split can be used later if/when `dataset.yaml` defines one:
 python3 evaluation/evaluate.py --split test
 ```
 
-## 9. Run tests
-
-The lightweight test suite does not require model weights, videos or a dataset:
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-Tests currently cover tracking metrics, hard-case classification and portable dataset YAML path resolution.
-
-GitHub Actions runs Python compilation and these tests automatically on pushes to `main` and on pull requests. It intentionally does not run YOLO inference, training or GPU/MPS workloads.
-
-## 10. Fine-tune a new version
+## 8. Fine-tune a new version
 
 `training/train.py` exists only for creating a **new model iteration**. It is not needed for inference with v1.0.0.
 
@@ -329,6 +299,16 @@ That `best.pt` is a **candidate**. Evaluate it before renaming/promoting it as t
 
 The code materializes an absolute dataset path at runtime, so a relative `path: dataset` in `dataset.yaml` is resolved against this repository rather than the global Ultralytics datasets directory.
 
+## Tests and CI
+
+Run local unit tests with:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+GitHub Actions runs lightweight syntax and unit-test checks on pushes to `main` and on pull requests. It does not run training or require GPU/MPS.
+
 ## Apple Silicon
 
 Automatic device selection prefers CUDA, then Apple MPS, then CPU. To check MPS manually:
@@ -338,10 +318,6 @@ python3 -c "import torch; print(torch.backends.mps.is_available())"
 ```
 
 You can override device selection in inference/evaluation/tracking with `--device`, and training defaults can be changed in `configs/train.toml`.
-
-## Changelog
-
-Project and pipeline changes are tracked in `CHANGELOG.md`. Model v1.0.0 remains the current promoted detector until product evidence justifies another trained version.
 
 ## Decisions intentionally still open
 
