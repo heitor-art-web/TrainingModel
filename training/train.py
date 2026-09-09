@@ -3,7 +3,7 @@ from pathlib import Path
 from ultralytics import YOLO
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PREVIOUS_WEIGHTS = PROJECT_ROOT / "runs" / "detect" / "yolo26b" / "weights" / "best.pt"
+PREVIOUS_WEIGHTS = PROJECT_ROOT / "runs" / "detect" / "yolo26b" / "weights" / "model_v1.0.0.pt"
 DATASET_CONFIG = PROJECT_ROOT / "dataset.yaml"
 RUNS_DIR = PROJECT_ROOT / "runs" / "detect"
 RUN_NAME = "yolo26b"
