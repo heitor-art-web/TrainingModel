@@ -32,6 +32,7 @@ Model weights, datasets and generated runs are intentionally excluded from Git. 
 TrainingModel/
 ├── configs/
 │   ├── autolabel.toml
+│   ├── ball_tracking.toml
 │   ├── model.toml
 │   └── train.toml
 ├── evaluation/
@@ -39,6 +40,7 @@ TrainingModel/
 ├── scripts/
 │   ├── audit_dataset.py
 │   ├── autolabel.py
+│   ├── ball_tracker.py
 │   ├── CVAT_analysis.py
 │   ├── flatten_dataset.py
 │   ├── inference.py
@@ -84,7 +86,35 @@ python3 scripts/inference.py /path/to/video.mp4 --weights /path/to/another_model
 
 Default confidence, IoU and image size are defined in `configs/model.toml`. Annotated outputs are saved under `runs/inference/` unless `--no-save` is used.
 
-## 2. Model configuration and versioning
+## 2. Hybrid ball tracking
+
+For basketball-specific video analysis, `scripts/ball_tracker.py` combines the current YOLO detector with temporal tracking. The detector remains unchanged; the tracker associates ball detections between frames, estimates velocity and predicts short gaps when the ball is temporarily missed because of blur or occlusion.
+
+Run:
+
+```bash
+python3 scripts/ball_tracker.py /path/to/game.mp4
+```
+
+Useful options:
+
+```bash
+python3 scripts/ball_tracker.py /path/to/game.mp4 --no-video
+python3 scripts/ball_tracker.py /path/to/game.mp4 --max-gap 8
+python3 scripts/ball_tracker.py /path/to/game.mp4 --weights /path/to/another_model.pt
+```
+
+Defaults live in `configs/ball_tracking.toml`. Output is written under:
+
+```text
+runs/ball_tracking/<video_name>/
+├── tracked.mp4
+└── trajectory.csv
+```
+
+Each trajectory row is marked as `detected`, `predicted` or `lost`. Predicted positions are intentionally limited to a short configurable gap and are not treated as real detector outputs. This gives a way to measure how much temporal information improves ball continuity before deciding whether a new detector version is necessary.
+
+## 3. Model configuration and versioning
 
 `configs/model.toml` is the source of truth for the **promoted/current** model:
 
@@ -101,7 +131,7 @@ Project convention for model versions:
 
 A candidate checkpoint is not promoted merely because training completes. Evaluate it first, then update `configs/model.toml` only after deciding that it replaces the current model.
 
-## 3. Prepare new data
+## 4. Prepare new data
 
 The existing helper scripts are kept for the current data-preparation workflow.
 
@@ -141,7 +171,7 @@ python3 scripts/CVAT_analysis.py
 
 This is intentionally a different workflow: frames with no retained detections are moved to `discarded_frames`. Use it only when that destructive behaviour is desired.
 
-## 4. Build the current train/validation dataset
+## 5. Build the current train/validation dataset
 
 ```bash
 python3 scripts/split_dataset.py
@@ -161,7 +191,7 @@ dataset/
     └── val/
 ```
 
-## 5. Audit the dataset before training
+## 6. Audit the dataset before training
 
 Run:
 
@@ -188,7 +218,7 @@ runs/audit/dataset_audit.json
 
 The command exits with a non-zero status when structural/label issues are found.
 
-## 6. Evaluate a model
+## 7. Evaluate a model
 
 Evaluate the current promoted model on validation data:
 
@@ -210,7 +240,7 @@ A `test` split can be used later if/when `dataset.yaml` defines one:
 python3 evaluation/evaluate.py --split test
 ```
 
-## 7. Fine-tune a new version
+## 8. Fine-tune a new version
 
 `training/train.py` exists only for creating a **new model iteration**. It is not needed for inference with v1.0.0.
 
@@ -246,18 +276,16 @@ Automatic device selection prefers CUDA, then Apple MPS, then CPU. To check MPS 
 python3 -c "import torch; print(torch.backends.mps.is_available())"
 ```
 
-You can override device selection in inference/evaluation with `--device`, and training defaults can be changed in `configs/train.toml`.
+You can override device selection in inference/evaluation/tracking with `--device`, and training defaults can be changed in `configs/train.toml`.
 
 ## Decisions intentionally still open
 
-The repository is now prepared for the next model iteration, but these methodological choices have **not** been changed yet:
+The repository is now prepared for continued product development with v1.0.0. These methodological choices remain open until real product evidence justifies a new model iteration:
 
+- whether temporal tracking is sufficient for ball continuity;
 - train/validation split strategy;
 - whether/how to add a fixed test set;
 - handling and proportion of negative samples;
 - frame deduplication;
 - Grounding DINO threshold tuning;
-- dataset composition for v1.0.1 vs v1.1.0;
-- fine-tuning hyperparameters/augmentations/freezing strategy.
-
-These should be decided before the next training run rather than mixed into the repository cleanup.
+- dataset composition for a future v1.0.1 or v1.1.0.
