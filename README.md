@@ -162,15 +162,63 @@ Project convention for model versions:
 
 A candidate checkpoint is not promoted merely because training completes. Evaluate it first, then update `configs/model.toml` only after deciding that it replaces the current model.
 
-## 4. Prepare new data
+## 4. Download or collect a new training set
 
-The existing helper scripts are kept for the current data-preparation workflow.
+New training sets are intentionally kept **outside Git**. Do not commit large image collections or exported datasets to the repository.
 
-If source images are nested by team/player:
+Recommended workflow:
+
+1. Download or export the new image set to a local folder.
+2. Keep the raw copy unchanged so it can be reproduced later.
+3. Move/copy the images into the local preparation structure expected by the helper scripts.
+4. Label or auto-label the images.
+5. Review the labels, build the train/validation dataset, audit it, then train a new model candidate.
+
+A simple local layout can be:
+
+```text
+TrainingModel/
+├── modelv0.2/              # local only; ignored by Git
+│   ├── images_input/       # newly downloaded/exported images
+│   ├── images/
+│   ├── frames/
+│   └── labels/
+└── dataset/                # generated train/validation dataset; ignored by Git
+```
+
+For example, after downloading a new image set:
+
+```bash
+mkdir -p modelv0.2/images_input
+cp /path/to/downloaded/images/* modelv0.2/images_input/
+```
+
+If the downloaded set is arranged in nested folders (for example by team/player), the existing flattening helper can be used when its input layout matches your source:
 
 ```bash
 python3 scripts/flatten_dataset.py
 ```
+
+The project does not currently include a provider-specific dataset downloader because the source of future data may change. If a dataset is downloaded from Kaggle, Hugging Face, CVAT, cloud storage or another provider, export/download it locally first and then feed the images into the preparation flow above.
+
+### Using hard cases as a future training set
+
+The hybrid tracker can help create the next targeted dataset from real product footage:
+
+```bash
+python3 scripts/ball_tracker.py videos/game.mp4
+python3 scripts/extract_ball_failures.py videos/game.mp4
+```
+
+Review the frames under:
+
+```text
+runs/hard_cases/<video_name>/frames/
+```
+
+Useful confirmed failures can then be copied into the next local image set and manually labelled or auto-labelled before training. This is the preferred path for improving the `basketball` class because it focuses new data on actual model failures rather than simply adding more easy frames.
+
+## 5. Prepare and label the new data
 
 ### Auto-label with Grounding DINO
 
@@ -184,7 +232,13 @@ box threshold: 0.35
 text threshold: 0.25
 ```
 
-Run:
+Place images under:
+
+```text
+modelv0.2/images_input/
+```
+
+Then run:
 
 ```bash
 python3 scripts/autolabel.py
@@ -194,6 +248,8 @@ Existing label files are skipped by default. Use `--overwrite` only when you int
 
 The script keeps a local manifest so repeated runs do not copy the same source images again. Images with no retained detections receive an empty YOLO label file; the treatment of negative samples can therefore be decided later without silently deleting them.
 
+After auto-labeling, manually review the important cases before using them for training, especially the `basketball` class and any frames that originated from hard-case extraction.
+
 ### Legacy CVAT helper
 
 ```bash
@@ -202,15 +258,17 @@ python3 scripts/CVAT_analysis.py
 
 This is intentionally a different workflow: frames with no retained detections are moved to `discarded_frames`. Use it only when that destructive behaviour is desired.
 
-## 5. Build the current train/validation dataset
+## 6. Build the train/validation dataset
+
+Once the images and labels are ready, run:
 
 ```bash
 python3 scripts/split_dataset.py
 ```
 
-The current implementation still uses the existing **80/20 random split with seed 42**. No change to the split methodology has been made yet.
+The current implementation uses the existing **80/20 random split with seed 42**.
 
-Expected local structure:
+Expected generated structure:
 
 ```text
 dataset/
@@ -222,9 +280,11 @@ dataset/
     └── val/
 ```
 
-## 6. Audit the dataset before training
+`dataset/` is ignored by Git and remains local.
 
-Run:
+## 7. Audit the dataset before training
+
+Always audit a newly prepared set before starting a training run:
 
 ```bash
 python3 scripts/audit_dataset.py
@@ -247,47 +307,32 @@ The report is written to:
 runs/audit/dataset_audit.json
 ```
 
-The command exits with a non-zero status when structural/label issues are found.
+The command exits with a non-zero status when structural/label issues are found. Fix those issues before training.
 
-## 7. Evaluate a model
+## 8. Fine-tune a new model version
 
-Evaluate the current promoted model on validation data:
+`training/train.py` creates a **new model candidate**. It is not needed to use v1.0.0.
 
-```bash
-python3 evaluation/evaluate.py --split val
+Before training, make sure the machine has:
+
+1. the baseline checkpoint configured in `configs/model.toml` (currently `model_v1.0.0.pt`);
+2. the prepared local `dataset/`;
+3. a clean audit result;
+4. a chosen target version.
+
+Review training parameters in:
+
+```text
+configs/train.toml
 ```
 
-Evaluate another checkpoint without promoting it:
-
-```bash
-python3 evaluation/evaluate.py --weights /path/to/candidate.pt --split val
-```
-
-Evaluation uses Ultralytics validation and stores plots plus `metrics_summary.json` under `runs/evaluation/`.
-
-A `test` split can be used later if/when `dataset.yaml` defines one:
-
-```bash
-python3 evaluation/evaluate.py --split test
-```
-
-## 8. Fine-tune a new version
-
-`training/train.py` exists only for creating a **new model iteration**. It is not needed for inference with v1.0.0.
-
-Before training, you need locally:
-
-1. baseline weights (by default `model_v1.0.0.pt`);
-2. a prepared dataset matching `dataset.yaml`;
-3. a chosen target version.
-
-Example:
+Then start a new version explicitly, for example:
 
 ```bash
 python3 training/train.py --version 1.1.0
 ```
 
-The target version is required deliberately to prevent accidental retraining. Training parameters live in `configs/train.toml`.
+The target version is required deliberately to prevent accidental retraining.
 
 The output run is versioned automatically:
 
@@ -295,9 +340,65 @@ The output run is versioned automatically:
 runs/detect/model_v1.1.0/weights/best.pt
 ```
 
-That `best.pt` is a **candidate**. Evaluate it before renaming/promoting it as the new current model.
+That `best.pt` is only a **candidate** at this point.
 
-The code materializes an absolute dataset path at runtime, so a relative `path: dataset` in `dataset.yaml` is resolved against this repository rather than the global Ultralytics datasets directory.
+## 9. Evaluate and promote the candidate
+
+Evaluate the new checkpoint before replacing the current model:
+
+```bash
+python3 evaluation/evaluate.py \
+  --weights runs/detect/model_v1.1.0/weights/best.pt \
+  --split val
+```
+
+Evaluation stores plots plus `metrics_summary.json` under `runs/evaluation/`.
+
+You should also run the candidate on representative product footage:
+
+```bash
+python3 scripts/ball_tracker.py \
+  videos/game.mp4 \
+  --weights runs/detect/model_v1.1.0/weights/best.pt
+```
+
+Compare its detection/tracking behaviour with v1.0.0 before promotion.
+
+Only after deciding that the candidate is better should you:
+
+1. rename/copy the selected checkpoint using the project version convention, for example `model_v1.1.0.pt`;
+2. update `configs/model.toml` so `version` and `weights` point to the promoted model;
+3. record the change in `CHANGELOG.md`.
+
+## Complete new-data → training flow
+
+The intended end-to-end workflow is:
+
+```text
+Download/export new images
+        ↓
+modelv0.2/images_input/
+        ↓
+auto-label / manual label review
+        ↓
+scripts/split_dataset.py
+        ↓
+scripts/audit_dataset.py
+        ↓
+training/train.py --version X.Y.Z
+        ↓
+evaluation/evaluate.py
+        ↓
+ball_tracker.py on representative videos
+        ↓
+promote checkpoint only if it improves the product
+```
+
+For ball-specific development, new data should preferably come from verified hard cases discovered with the current model:
+
+```text
+v1.0.0 → real games → tracking/hard-case extraction → reviewed labels → future training set
+```
 
 ## Tests and CI
 
@@ -321,7 +422,7 @@ You can override device selection in inference/evaluation/tracking with `--devic
 
 ## Decisions intentionally still open
 
-The repository is now prepared for continued product development with v1.0.0. These methodological choices remain open until real product evidence justifies a new model iteration:
+The repository is prepared for continued product development with v1.0.0. These methodological choices remain open until real product evidence justifies a new model iteration:
 
 - whether temporal tracking is sufficient for ball continuity;
 - train/validation split strategy;
