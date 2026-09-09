@@ -1,0 +1,8 @@
+version = "1.0.0"
+weights = "runs/detect/yolo26b/weights/model_v1.0.0.pt"
+classes = ["basketball", "player", "referee", "backboard", "rim"]
+
+[inference]
+confidence = 0.25
+iou = 0.70
+imgsz = 768
