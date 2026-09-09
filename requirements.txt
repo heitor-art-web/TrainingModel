@@ -5,3 +5,4 @@ torchvision
 Pillow
 tqdm
 PyYAML
+opencv-python
