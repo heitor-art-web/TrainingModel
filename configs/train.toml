@@ -1,0 +1,13 @@
+epochs = 50
+imgsz = 768
+batch = 8
+lr0 = 0.0005
+device = "auto"
+workers = 4
+cache = "disk"
+plots = true
+save = true
+patience = 15
+
+# The training script creates runs/detect/model_v<target-version>/.
+# A target version is required on the command line to avoid accidental retraining.
