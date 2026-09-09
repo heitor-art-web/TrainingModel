@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     inference_config = model_config.get("inference", {})
 
     parser = argparse.ArgumentParser(
-        description="Run the current basketball detector on an image, video, directory or URL."
+        description="Run a basketball detector on an image, video, directory or URL."
     )
     parser.add_argument("source", help="Image/video path, directory, URL or supported camera source.")
     parser.add_argument("--weights", help="Optional checkpoint override.")
@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     model_config = load_model_config()
-    version = model_config["version"]
+    configured_version = model_config["version"]
     weights = resolve_weights(args.weights)
 
     if not weights.exists():
@@ -68,10 +68,10 @@ def main() -> None:
 
     device = select_device(args.device)
     output_project = PROJECT_ROOT / "runs" / "inference"
-    run_name = f"model_v{version}"
+    run_name = weights.stem
 
-    print(f"Model version: {version}")
-    print(f"Weights: {weights}")
+    print(f"Configured promoted model version: {configured_version}")
+    print(f"Checkpoint: {weights}")
     print(f"Device: {device}")
 
     model = YOLO(str(weights))
