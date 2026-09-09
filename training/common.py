@@ -4,7 +4,6 @@ from pathlib import Path
 import tempfile
 import tomllib
 
-import torch
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +35,9 @@ def resolve_weights(override: str | None = None) -> Path:
 def select_device(preferred: str = "auto") -> str:
     if preferred != "auto":
         return preferred
+
+    import torch
+
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
