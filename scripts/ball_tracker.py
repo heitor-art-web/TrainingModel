@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from tracking.metrics import write_tracking_report
 from training.common import load_toml, resolve_weights, select_device
 
 
@@ -135,7 +136,7 @@ def parse_args() -> argparse.Namespace:
         default=float(config["max_distance_ratio"]),
         help="Maximum association distance as a fraction of frame diagonal.",
     )
-    parser.add_argument("--no-video", action="store_true", help="Only write the CSV trajectory.")
+    parser.add_argument("--no-video", action="store_true", help="Only write trajectory/report files.")
     return parser.parse_args()
 
 
@@ -175,6 +176,7 @@ def main() -> None:
     output_dir = PROJECT_ROOT / "runs" / "ball_tracking" / source.stem
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "trajectory.csv"
+    report_path = output_dir / "tracking_report.json"
     video_path = output_dir / "tracked.mp4"
 
     writer = None
@@ -198,9 +200,6 @@ def main() -> None:
     )
     trail = deque(maxlen=int(config["trail_length"]))
 
-    detected_frames = 0
-    predicted_frames = 0
-    lost_frames = 0
     frame_index = 0
 
     print(f"Weights: {weights}")
@@ -256,13 +255,6 @@ def main() -> None:
                     )
 
             status, state, confidence = tracker.update(detections, width, height)
-
-            if status == "detected":
-                detected_frames += 1
-            elif status == "predicted":
-                predicted_frames += 1
-            else:
-                lost_frames += 1
 
             if state is not None:
                 trail.append((int(round(state.x)), int(round(state.y)), status))
@@ -321,13 +313,18 @@ def main() -> None:
     if writer is not None:
         writer.release()
 
+    report = write_tracking_report(csv_path, report_path)
+
     print("\nTracking complete.")
-    print(f"Detected frames:  {detected_frames}")
-    print(f"Predicted frames: {predicted_frames}")
-    print(f"Lost frames:      {lost_frames}")
-    print(f"Trajectory CSV:   {csv_path}")
+    print(f"Detected frames:      {report['detected_frames']}")
+    print(f"Predicted frames:     {report['predicted_frames']}")
+    print(f"Lost frames:          {report['lost_frames']}")
+    print(f"Continuity ratio:     {report['continuity_ratio']:.3f}")
+    print(f"Longest tracked run:  {report['longest_continuous_track']} frames")
+    print(f"Trajectory CSV:       {csv_path}")
+    print(f"Tracking report:      {report_path}")
     if writer is not None:
-        print(f"Tracked video:    {video_path}")
+        print(f"Tracked video:        {video_path}")
 
 
 if __name__ == "__main__":
