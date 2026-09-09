@@ -1,0 +1,25 @@
+cat > .gitignore <<'EOF'
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Datasets
+dataset/
+dataset_1/
+dataset_1.1/
+get_images/
+
+# Training outputs
+runs/
+
+# Models / weights
+weights/
+modelv0.2/
+
+# Common ML weights
+*.pt
+*.pth
+*.onnx
+EOF

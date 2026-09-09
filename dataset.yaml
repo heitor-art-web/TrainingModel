@@ -1,0 +1,13 @@
+path: dataset
+
+train: images/train
+val: images/val
+
+nc: 5
+#define number of classes and name
+names:
+  0: basketball
+  1: player
+  2: referee
+  3: backboard
+  4: rim
