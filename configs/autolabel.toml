@@ -1,0 +1,10 @@
+model = "IDEA-Research/grounding-dino-base"
+box_threshold = 0.35
+text_threshold = 0.25
+
+[class_mapping]
+basketball = 0
+"basketball player" = 1
+referee = 2
+backboard = 3
+rim = 4
