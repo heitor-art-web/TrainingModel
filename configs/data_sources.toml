@@ -1,0 +1,20 @@
+# Source registry and dataset split policy.
+# Splits are assigned by source/video, never by individual frame.
+
+[split]
+train = 0.70
+val = 0.15
+test = 0.15
+seed = 42
+near_duplicate_hamming = 4
+
+[[sources]]
+id = "OwiQgAMqyUs"
+kind = "youtube"
+reference = "https://www.youtube.com/watch?v=OwiQgAMqyUs"
+description = "First ~60 seconds reserved as the initial gold-test source."
+role = "gold_test"
+start_seconds = 0.0
+end_seconds = 60.0
+allow_training = false
+allow_hard_case_training = false

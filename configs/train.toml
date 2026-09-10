@@ -9,5 +9,9 @@ plots = true
 save = true
 patience = 15
 
-# The training script creates runs/detect/model_v<target-version>/.
-# A target version is required on the command line to avoid accidental retraining.
+# Used only with: training/train.py --init pretrained
+# Keep all other settings identical when comparing promoted vs pretrained starts.
+pretrained_model = "yolo26b.pt"
+
+# Runs are created as:
+# runs/detect/model_v<target-version>_<promoted|pretrained|custom>/

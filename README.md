@@ -1,83 +1,80 @@
 # TrainingModel
 
-Basketball object-detection project built around Ultralytics YOLO, with Grounding DINO helpers for preparing new labelled data.
+Basketball object-detection project built around Ultralytics YOLO, with Grounding DINO helpers, temporal ball tracking and a curated-data workflow for the next model iteration.
 
 ## Current model
 
-The current promoted model is **v1.0.0**.
+The current promoted model remains **v1.0.0**. Training a new model does not automatically replace it.
 
-Its default local checkpoint path is configured in `configs/model.toml`:
+Default local checkpoint:
 
 ```text
 runs/detect/yolo26b/weights/model_v1.0.0.pt
 ```
 
-Model weights, datasets, local source videos and generated runs are intentionally excluded from Git. A cloned repository therefore contains the code/configuration, but you must copy the required `.pt` file, dataset and any source footage to the machine where they are needed.
+Weights, datasets, local videos, review data and generated runs are intentionally excluded from Git.
 
-## Classes
+## Classes and product priorities
 
-| ID | Class |
-| --- | --- |
-| 0 | basketball |
-| 1 | player |
-| 2 | referee |
-| 3 | backboard |
-| 4 | rim |
+| ID | Class | Priority |
+| --- | --- | --- |
+| 0 | basketball | highest; prefer fewer false positives |
+| 1 | player | high; prefer higher recall |
+| 2 | referee | secondary |
+| 3 | backboard | secondary |
+| 4 | rim | high; prefer higher recall |
 
-`rim` is the canonical class name across dataset and auto-label configuration.
+`rim` is the canonical class name.
 
-## Project structure
+## Data policy for v1.1.0
 
-```text
-TrainingModel/
-├── configs/
-│   ├── autolabel.toml
-│   ├── ball_tracking.toml
-│   ├── model.toml
-│   └── train.toml
-├── evaluation/
-│   └── evaluate.py
-├── scripts/
-│   ├── audit_dataset.py
-│   ├── autolabel.py
-│   ├── ball_tracker.py
-│   ├── CVAT_analysis.py
-│   ├── extract_ball_failures.py
-│   ├── flatten_dataset.py
-│   ├── inference.py
-│   ├── rename.py
-│   └── split_dataset.py
-├── tests/
-├── tracking/
-├── training/
-│   ├── __init__.py
-│   ├── common.py
-│   └── train.py
-├── videos/                 # local only; ignored by Git
-├── CHANGELOG.md
-├── dataset.yaml
-├── requirements.txt
-└── README.md
-```
+The next dataset follows these rules:
 
-The `videos/` directory is the standard location for local game footage used during inference, tracking and hard-case extraction. It is ignored by Git so large video files are never pushed to the repository.
+- target split is **70% train / 15% validation / 15% test**;
+- splitting is by complete **video/source**, never by individual random frames;
+- a source can exist in only one split;
+- exact and near-duplicate frames are filtered before the split;
+- hard negatives where no basketball is visible are valid training examples;
+- Grounding DINO is a pre-labelling assistant, not ground truth;
+- selected hard cases are manually reviewed;
+- `skip` and `uncertain` review rows are not exported into curated training data;
+- historical `dataset/`, `dataset_1/` and `dataset_1.1/` are reference sources only, not automatically merged into v1.1.0;
+- the gold test is fully manually reviewed and never used for training or training-oriented hard-case mining.
 
-Create it locally after cloning:
-
-```bash
-mkdir -p videos
-```
-
-Example:
+The source registry is `configs/data_sources.toml`. The first protected gold-test source is:
 
 ```text
-videos/
-└── game.mp4
+source id: OwiQgAMqyUs
+role: gold_test
+segment: approximately the first 60 seconds
+training: forbidden
 ```
+
+Only use locally obtained footage when you have the rights/permission needed for that use. This repository does not download YouTube videos.
+
+## Local data layout
+
+Use stable source IDs so origin is never lost:
+
+```text
+local_data/
+└── sources/
+    ├── game_or_video_A/
+    │   ├── images/
+    │   ├── labels/
+    │   └── manifest.csv       # optional but recommended
+    ├── game_or_video_B/
+    │   ├── images/
+    │   └── labels/
+    └── OwiQgAMqyUs/
+        ├── images/
+        ├── labels/
+        └── manifest.csv       # gold-test rows must all be manually approved
+```
+
+`local_data/` is ignored by Git.
 
 ## Setup
-
-Create and activate a virtual environment:
 
 ```bash
 python3 -m venv .venv
@@ -86,45 +83,14 @@ python3 -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## 1. Use the existing model
-
-Training is **not required** to use `model_v1.0.0.pt`.
-
-Run inference on an image, video, directory or supported URL/source:
+## Use v1.0.0 without training
 
 ```bash
 python3 scripts/inference.py videos/game.mp4
-```
-
-Useful options:
-
-```bash
-python3 scripts/inference.py /path/to/image.jpg --conf 0.35
-python3 scripts/inference.py videos/game.mp4 --no-save
-python3 scripts/inference.py videos/game.mp4 --weights /path/to/another_model.pt
-```
-
-Default confidence, IoU and image size are defined in `configs/model.toml`. Annotated outputs are saved under `runs/inference/` unless `--no-save` is used.
-
-## 2. Hybrid ball tracking
-
-For basketball-specific video analysis, `scripts/ball_tracker.py` combines the current YOLO detector with temporal tracking. The detector remains unchanged; the tracker associates ball detections between frames, estimates velocity and predicts short gaps when the ball is temporarily missed because of blur or occlusion.
-
-Place local game footage under `videos/` and run:
-
-```bash
 python3 scripts/ball_tracker.py videos/game.mp4
 ```
 
-Useful options:
-
-```bash
-python3 scripts/ball_tracker.py videos/game.mp4 --no-video
-python3 scripts/ball_tracker.py videos/game.mp4 --max-gap 8
-python3 scripts/ball_tracker.py videos/game.mp4 --weights /path/to/another_model.pt
-```
-
-Defaults live in `configs/ball_tracking.toml`. Output is written under:
+Ball tracking output:
 
 ```text
 runs/ball_tracking/<video_name>/
@@ -133,301 +99,280 @@ runs/ball_tracking/<video_name>/
 └── trajectory.csv
 ```
 
-Each trajectory row is marked as `detected`, `predicted` or `lost`. Predicted positions are intentionally limited to a short configurable gap and are not treated as real detector outputs. This gives a way to measure how much temporal information improves ball continuity before deciding whether a new detector version is necessary.
-
-### Extract hard cases
-
-After running the tracker, extract representative problem frames with:
+Extract representative ball failures:
 
 ```bash
 python3 scripts/extract_ball_failures.py videos/game.mp4
 ```
 
-The extractor samples frames such as predicted gaps, lost tracking, low-confidence detections and large trajectory jumps. Outputs are written under `runs/hard_cases/<video_name>/` for later review or dataset construction.
+This produces `runs/hard_cases/<video_name>/frames/` plus `manifest.csv` with reasons such as `predicted`, `lost`, `low_confidence` and `large_jump`.
 
-## 3. Model configuration and versioning
+## Prepare labels with Grounding DINO
 
-`configs/model.toml` is the source of truth for the **promoted/current** model:
-
-- model version;
-- local checkpoint path;
-- class names;
-- default inference settings.
-
-Project convention for model versions:
-
-- **PATCH** (`1.0.0` → `1.0.1`): a small corrective model iteration with no material change to the task/classes or overall training strategy;
-- **MINOR** (`1.0.0` → `1.1.0`): new training data or a meaningful improvement to the training/data pipeline while keeping the same task/classes;
-- **MAJOR** (`1.x` → `2.0.0`): a breaking change to the model contract, classes or intended task.
-
-A candidate checkpoint is not promoted merely because training completes. Evaluate it first, then update `configs/model.toml` only after deciding that it replaces the current model.
-
-## 4. Download or collect a new training set
-
-New training sets are intentionally kept **outside Git**. Do not commit large image collections or exported datasets to the repository.
-
-Recommended workflow:
-
-1. Download or export the new image set to a local folder.
-2. Keep the raw copy unchanged so it can be reproduced later.
-3. Move/copy the images into the local preparation structure expected by the helper scripts.
-4. Label or auto-label the images.
-5. Review the labels, build the train/validation dataset, audit it, then train a new model candidate.
-
-A simple local layout can be:
-
-```text
-TrainingModel/
-├── modelv0.2/              # local only; ignored by Git
-│   ├── images_input/       # newly downloaded/exported images
-│   ├── images/
-│   ├── frames/
-│   └── labels/
-└── dataset/                # generated train/validation dataset; ignored by Git
-```
-
-For example, after downloading a new image set:
+The existing auto-label helper remains available:
 
 ```bash
-mkdir -p modelv0.2/images_input
-cp /path/to/downloaded/images/* modelv0.2/images_input/
+python3 scripts/autolabel.py --root local_data/work/game_A
 ```
 
-If the downloaded set is arranged in nested folders (for example by team/player), the existing flattening helper can be used when its input layout matches your source:
-
-```bash
-python3 scripts/flatten_dataset.py
-```
-
-The project does not currently include a provider-specific dataset downloader because the source of future data may change. If a dataset is downloaded from Kaggle, Hugging Face, CVAT, cloud storage or another provider, export/download it locally first and then feed the images into the preparation flow above.
-
-### Using hard cases as a future training set
-
-The hybrid tracker can help create the next targeted dataset from real product footage:
-
-```bash
-python3 scripts/ball_tracker.py videos/game.mp4
-python3 scripts/extract_ball_failures.py videos/game.mp4
-```
-
-Review the frames under:
-
-```text
-runs/hard_cases/<video_name>/frames/
-```
-
-Useful confirmed failures can then be copied into the next local image set and manually labelled or auto-labelled before training. This is the preferred path for improving the `basketball` class because it focuses new data on actual model failures rather than simply adding more easy frames.
-
-## 5. Prepare and label the new data
-
-### Auto-label with Grounding DINO
-
-The auto-label configuration is in `configs/autolabel.toml`.
-
-Current defaults are:
-
-```text
-model: IDEA-Research/grounding-dino-base
-box threshold: 0.35
-text threshold: 0.25
-```
-
-Place images under:
-
-```text
-modelv0.2/images_input/
-```
-
-Then run:
+or with the legacy layout:
 
 ```bash
 python3 scripts/autolabel.py
 ```
 
-Existing label files are skipped by default. Use `--overwrite` only when you intentionally want to regenerate them.
+Configuration lives in `configs/autolabel.toml`. Auto-label output must be treated as a starting point, especially for small/blurred/occluded basketballs.
 
-The script keeps a local manifest so repeated runs do not copy the same source images again. Images with no retained detections receive an empty YOLO label file; the treatment of negative samples can therefore be decided later without silently deleting them.
+## Prepare a review batch
 
-After auto-labeling, manually review the important cases before using them for training, especially the `basketball` class and any frames that originated from hard-case extraction.
-
-### Legacy CVAT helper
+For hard cases:
 
 ```bash
-python3 scripts/CVAT_analysis.py
+python3 scripts/prepare_review.py \
+  --batch game_A_ball_failures \
+  --source-id game_A \
+  --hard-cases runs/hard_cases/game_A
 ```
 
-This is intentionally a different workflow: frames with no retained detections are moved to `discarded_frames`. Use it only when that destructive behaviour is desired.
-
-## 6. Build the train/validation dataset
-
-Once the images and labels are ready, run:
+For an arbitrary image/YOLO-label folder:
 
 ```bash
-python3 scripts/split_dataset.py
+python3 scripts/prepare_review.py \
+  --batch game_A_sample \
+  --source-id game_A \
+  --images /path/to/images \
+  --labels /path/to/labels
 ```
 
-The current implementation uses the existing **80/20 random split with seed 42**.
+A batch is non-destructive:
 
-Expected generated structure:
+```text
+runs/review/<batch>/
+├── images/
+├── labels_original/
+├── labels_reviewed/
+└── manifest.csv
+```
+
+For a protected gold-test source, preparation must explicitly be evaluation-only:
+
+```bash
+python3 scripts/prepare_review.py \
+  --batch gold_test_01 \
+  --source-id OwiQgAMqyUs \
+  --images /path/to/gold/images \
+  --labels /path/to/gold/labels \
+  --purpose evaluation
+```
+
+## Review locally in the browser
+
+```bash
+python3 scripts/review_labels.py game_A_ball_failures
+```
+
+The reviewer supports all five classes and allows you to:
+
+- add a bounding box;
+- move/resize a box;
+- delete an incorrect box;
+- change a box class;
+- filter by hard-case reason, class and review state;
+- see original confidence/metadata when it exists;
+- mark each frame `corrected`, `already_correct`, `skip` or `uncertain`.
+
+Navigation saves automatically. On restart, the default view resumes with unreviewed frames. Original labels are never overwritten.
+
+## Export approved reviewed data
+
+```bash
+python3 scripts/export_reviewed.py game_A_ball_failures
+```
+
+Only `corrected` and `already_correct` rows are copied into:
+
+```text
+local_data/sources/<source_id>/
+├── images/
+├── labels/
+└── manifest.csv
+```
+
+`skip` and `uncertain` rows remain in the review batch but are excluded from the curated source.
+
+For the gold test, review **every selected frame** before export. The dataset builder refuses unreviewed gold-test rows.
+
+## Build the 70/15/15 dataset
+
+Once curated source directories exist:
+
+```bash
+python3 scripts/build_dataset.py
+```
+
+If `dataset/` already exists and you intentionally want to rebuild it:
+
+```bash
+python3 scripts/build_dataset.py --force
+```
+
+The builder:
+
+1. reads complete source folders under `local_data/sources/`;
+2. honors protected/explicit roles from `configs/data_sources.toml`;
+3. removes exact and near-duplicate images globally, preserving protected test and hard-case examples first;
+4. assigns each remaining source to exactly one split;
+5. targets 70/15/15 by frame count while respecting whole-source boundaries;
+6. prefixes output filenames with the source ID;
+7. writes `dataset/manifest.csv` and `dataset/split_report.json`.
+
+Result:
 
 ```text
 dataset/
 ├── images/
 │   ├── train/
-│   └── val/
-└── labels/
-    ├── train/
-    └── val/
+│   ├── val/
+│   └── test/
+├── labels/
+│   ├── train/
+│   ├── val/
+│   └── test/
+├── manifest.csv
+└── split_report.json
 ```
 
-`dataset/` is ignored by Git and remains local.
+The exact proportions can vary slightly because a video is never split across subsets.
 
-## 7. Audit the dataset before training
+`python3 scripts/split_dataset.py` remains as a compatibility command but now invokes this source-aware builder; the former random 80/20 frame split is retired.
 
-Always audit a newly prepared set before starting a training run:
+## Audit before training
 
 ```bash
 python3 scripts/audit_dataset.py
 ```
 
-The audit checks:
+Fix structural/label issues before starting a run. Empty YOLO labels are allowed and are useful for deliberate negative examples when the corresponding image truly contains none of the five annotated classes.
 
-- image/label pairing;
-- orphan label files;
-- corrupt images;
-- empty label files;
-- invalid class IDs;
-- YOLO coordinate ranges;
-- bounding boxes crossing image boundaries;
-- object counts by class.
+## Train the v1.1.0 A/B candidates
 
-The report is written to:
+The agreed experiment changes only the initialization while keeping dataset and training configuration identical.
 
-```text
-runs/audit/dataset_audit.json
-```
-
-The command exits with a non-zero status when structural/label issues are found. Fix those issues before training.
-
-## 8. Fine-tune a new model version
-
-`training/train.py` creates a **new model candidate**. It is not needed to use v1.0.0.
-
-Before training, make sure the machine has:
-
-1. the baseline checkpoint configured in `configs/model.toml` (currently `model_v1.0.0.pt`);
-2. the prepared local `dataset/`;
-3. a clean audit result;
-4. a chosen target version.
-
-Review training parameters in:
-
-```text
-configs/train.toml
-```
-
-Then start a new version explicitly, for example:
+Candidate A — start from promoted v1.0.0:
 
 ```bash
-python3 training/train.py --version 1.1.0
+python3 training/train.py --version 1.1.0 --init promoted
 ```
 
-The target version is required deliberately to prevent accidental retraining.
+Candidate B — start from the generic pretrained YOLO base:
 
-The output run is versioned automatically:
+```bash
+python3 training/train.py --version 1.1.0 --init pretrained
+```
+
+The pretrained base is configured in `configs/train.toml` (`yolo26b.pt` by default). Ultralytics may download that public base checkpoint when it is not already cached.
+
+Outputs are separated:
 
 ```text
-runs/detect/model_v1.1.0/weights/best.pt
+runs/detect/
+├── model_v1.1.0_promoted/weights/best.pt
+└── model_v1.1.0_pretrained/weights/best.pt
 ```
 
-That `best.pt` is only a **candidate** at this point.
+A custom local start is still possible with `--weights /path/to/model.pt`, which creates a `_custom` run.
 
-## 9. Evaluate and promote the candidate
+Do not change epochs, image size, learning rate or other training settings between the two A/B candidates unless the experiment is intentionally being changed. Current defaults remain in `configs/train.toml`.
 
-Evaluate the new checkpoint before replacing the current model:
+## Evaluate candidates
+
+Validation during development:
 
 ```bash
 python3 evaluation/evaluate.py \
-  --weights runs/detect/model_v1.1.0/weights/best.pt \
+  --weights runs/detect/model_v1.1.0_promoted/weights/best.pt \
   --split val
 ```
 
-Evaluation stores plots plus `metrics_summary.json` under `runs/evaluation/`.
-
-You should also run the candidate on representative product footage:
+Final held-out test evaluation:
 
 ```bash
-python3 scripts/ball_tracker.py \
-  videos/game.mp4 \
-  --weights runs/detect/model_v1.1.0/weights/best.pt
+python3 evaluation/evaluate.py \
+  --weights runs/detect/model_v1.1.0_promoted/weights/best.pt \
+  --split test
 ```
 
-Compare its detection/tracking behaviour with v1.0.0 before promotion.
+`metrics_summary.json` now includes per-class precision, recall and mAP metrics.
 
-Only after deciding that the candidate is better should you:
+Compare a baseline summary against a candidate summary:
 
-1. rename/copy the selected checkpoint using the project version convention, for example `model_v1.1.0.pt`;
-2. update `configs/model.toml` so `version` and `weights` point to the promoted model;
-3. record the change in `CHANGELOG.md`.
-
-## Complete new-data → training flow
-
-The intended end-to-end workflow is:
-
-```text
-Download/export new images
-        ↓
-modelv0.2/images_input/
-        ↓
-auto-label / manual label review
-        ↓
-scripts/split_dataset.py
-        ↓
-scripts/audit_dataset.py
-        ↓
-training/train.py --version X.Y.Z
-        ↓
-evaluation/evaluate.py
-        ↓
-ball_tracker.py on representative videos
-        ↓
-promote checkpoint only if it improves the product
+```bash
+python3 evaluation/compare_models.py \
+  runs/evaluation/<baseline>/metrics_summary.json \
+  runs/evaluation/<candidate>/metrics_summary.json
 ```
 
-For ball-specific development, new data should preferably come from verified hard cases discovered with the current model:
+Detection promotion priorities are:
+
+- `basketball`: precision must improve (false positives are the primary concern);
+- `player`: recall must not worsen;
+- `rim`: recall must not worsen.
+
+Passing those checks is **not sufficient by itself**. Before promotion, compare tracking continuity and behaviour on representative real videos. The test set must not be used to tune thresholds or choose training settings.
+
+## Model promotion
+
+`configs/model.toml` remains the source of truth for the promoted model. Keep v1.0.0 promoted until a candidate has passed validation, held-out testing and real-video tracking review.
+
+Only then:
+
+1. copy/rename the selected checkpoint using the model version convention;
+2. update `configs/model.toml`;
+3. record the promotion in `CHANGELOG.md`.
+
+## End-to-end v1.1.0 flow
 
 ```text
-v1.0.0 → real games → tracking/hard-case extraction → reviewed labels → future training set
+real videos / images from varied camera types
+        ↓
+source IDs preserved
+        ↓
+normal-frame sampling + hard-case mining
+        ↓
+Grounding DINO pre-labels
+        ↓
+selective manual review
+        ↓
+approved curated sources + hard negatives
+        ↓
+source-aware deduplication
+        ↓
+70% train / 15% val / 15% test by source
+        ↓
+dataset audit
+        ↓
+A: v1.0.0 initialization
+B: pretrained initialization
+        ↓
+validation comparison
+        ↓
+held-out test + tracking/product-video review
+        ↓
+promote only if agreed priorities improve
 ```
 
 ## Tests and CI
-
-Run local unit tests with:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-GitHub Actions runs lightweight syntax and unit-test checks on pushes to `main` and on pull requests. It does not run training or require GPU/MPS.
+GitHub Actions runs syntax and lightweight unit tests on pushes to `main` and pull requests. Training itself is never run in CI.
 
 ## Apple Silicon
 
-Automatic device selection prefers CUDA, then Apple MPS, then CPU. To check MPS manually:
+Automatic device selection prefers CUDA, then Apple MPS, then CPU. Check MPS with:
 
 ```bash
 python3 -c "import torch; print(torch.backends.mps.is_available())"
 ```
-
-You can override device selection in inference/evaluation/tracking with `--device`, and training defaults can be changed in `configs/train.toml`.
-
-## Decisions intentionally still open
-
-The repository is prepared for continued product development with v1.0.0. These methodological choices remain open until real product evidence justifies a new model iteration:
-
-- whether temporal tracking is sufficient for ball continuity;
-- train/validation split strategy;
-- whether/how to add a fixed test set;
-- handling and proportion of negative samples;
-- frame deduplication;
-- Grounding DINO threshold tuning;
-- dataset composition for a future v1.0.1 or v1.1.0.

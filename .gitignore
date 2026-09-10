@@ -11,6 +11,7 @@ dataset_1.1/
 get_images/
 modelv0.2/
 videos/
+local_data/
 
 # Generated outputs
 runs/

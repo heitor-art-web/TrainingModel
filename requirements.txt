@@ -6,3 +6,4 @@ Pillow
 tqdm
 PyYAML
 opencv-python
+gradio_image_annotation==0.5.6

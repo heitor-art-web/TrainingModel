@@ -47,6 +47,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def per_class_metrics(metrics) -> dict[str, dict[str, float]]:
+    names = metrics.names
+    class_indices = list(getattr(metrics.box, "ap_class_index", range(len(metrics.box.p))))
+    precisions = list(metrics.box.p)
+    recalls = list(metrics.box.r)
+    map50s = list(metrics.box.ap50)
+    maps = list(metrics.box.maps)
+
+    result: dict[str, dict[str, float]] = {}
+    for offset, class_id in enumerate(class_indices):
+        class_id = int(class_id)
+        name = str(names[class_id]) if isinstance(names, dict) else str(names[class_id])
+        result[name] = {
+            "precision": float(precisions[offset]),
+            "recall": float(recalls[offset]),
+            "map50": float(map50s[offset]),
+            "map50_95": float(maps[offset]),
+        }
+    return result
+
+
 def main() -> None:
     args = parse_args()
     model_config = load_model_config()
@@ -89,6 +110,7 @@ def main() -> None:
         "map50_95": float(metrics.box.map),
         "map50": float(metrics.box.map50),
         "map75": float(metrics.box.map75),
+        "per_class": per_class_metrics(metrics),
     }
 
     output_dir = output_project / run_name

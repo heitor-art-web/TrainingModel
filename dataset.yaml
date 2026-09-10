@@ -2,9 +2,9 @@ path: dataset
 
 train: images/train
 val: images/val
+test: images/test
 
 nc: 5
-#define number of classes and name
 names:
   0: basketball
   1: player
