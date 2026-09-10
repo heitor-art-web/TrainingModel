@@ -30,7 +30,7 @@ def normalize_class_name(value: str) -> str:
 
 
 def build_class_id_map(names: dict | list) -> dict[int, int]:
-    """Map E-BARD YOLO class IDs into TrainingModel class IDs.
+    """Map E-BARD numeric class IDs into TrainingModel class IDs.
 
     E-BARD `hoop` is intentionally mapped to TrainingModel `rim` (class 4).
     Unknown source classes are ignored by the importer.
@@ -51,19 +51,36 @@ def build_class_id_map(names: dict | list) -> dict[int, int]:
     return result
 
 
+def resolve_source_class(token: str, class_map: dict[int, int]) -> int | None:
+    """Resolve either a numeric E-BARD class ID or a textual class name.
+
+    Some E-BARD exports use conventional YOLO numeric IDs while others place
+    labels such as `player`, `basketball`, `referee` or `hoop` in column 1.
+    Supporting both keeps the importer compatible with either export style.
+    """
+    try:
+        source_id = int(token)
+    except ValueError:
+        normalized = normalize_class_name(token)
+        return TARGET_CLASS_IDS.get(normalized)
+    return class_map.get(source_id)
+
+
 def remap_yolo_line(line: str, class_map: dict[int, int]) -> str | None:
     parts = line.strip().split()
     if not parts:
         return None
     if len(parts) < 5:
         raise ValueError(f"Invalid YOLO annotation line: {line!r}")
-    source_class = int(parts[0])
-    if source_class not in class_map:
+
+    target_class = resolve_source_class(parts[0], class_map)
+    if target_class is None:
         return None
+
     values = [float(value) for value in parts[1:5]]
     if any(value < 0.0 or value > 1.0 for value in values):
         raise ValueError(f"YOLO coordinates outside [0, 1]: {line!r}")
-    return " ".join([str(class_map[source_class]), *parts[1:5]])
+    return " ".join([str(target_class), *parts[1:5]])
 
 
 def infer_game_id(stem: str, source_regex: str | None = None) -> str:
