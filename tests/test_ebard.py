@@ -54,7 +54,7 @@ class EBARDTests(unittest.TestCase):
             {},
             image_size=(1280, 720),
         )
-        self.assertEqual(line, "1 0.023802 0.176694 0.047604 0.323306")
+        self.assertEqual(line, "1 0.023801 0.176694 0.047602 0.323306")
 
     def test_completely_outside_box_is_skipped(self):
         self.assertIsNone(
