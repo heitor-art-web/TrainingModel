@@ -26,6 +26,7 @@ from training.data import (
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 APPROVED_REVIEW_STATUSES = {"corrected", "already_correct"}
+BOUNDARY_EPSILON = 1e-6
 
 
 def parse_args() -> argparse.Namespace:
@@ -118,6 +119,66 @@ def collect_samples(sources_root: Path, registry: dict) -> list[dict]:
     if not samples:
         raise ValueError(f"No image/label pairs found under {sources_root}.")
     return samples
+
+
+def sanitize_yolo_label_text(text: str, source: str = "<label>") -> tuple[str, int]:
+    """Clip tiny boundary overflow while rejecting genuinely malformed YOLO boxes.
+
+    The curated source label is never modified; sanitation is applied only to the
+    materialized dataset copy. A one-micro-unit inset prevents decimal rounding at
+    an exact image edge from re-creating an out-of-bounds box after serialization.
+    """
+    output: list[str] = []
+    changed = 0
+    for line_number, raw in enumerate(text.splitlines(), start=1):
+        parts = raw.strip().split()
+        if not parts:
+            continue
+        if len(parts) != 5:
+            raise ValueError(f"{source}: line {line_number} must contain 5 values")
+        try:
+            class_id = int(parts[0])
+            xc, yc, bw, bh = map(float, parts[1:])
+        except ValueError as exc:
+            raise ValueError(f"{source}: line {line_number} contains invalid values") from exc
+        if class_id < 0 or bw <= 0.0 or bh <= 0.0:
+            raise ValueError(f"{source}: line {line_number} contains a degenerate box")
+
+        x1 = xc - bw / 2.0
+        y1 = yc - bh / 2.0
+        x2 = xc + bw / 2.0
+        y2 = yc + bh / 2.0
+        clipped_x1 = max(0.0, x1)
+        clipped_y1 = max(0.0, y1)
+        clipped_x2 = min(1.0, x2)
+        clipped_y2 = min(1.0, y2)
+        if clipped_x2 <= clipped_x1 or clipped_y2 <= clipped_y1:
+            raise ValueError(f"{source}: line {line_number} lies outside the image")
+
+        overflow = x1 < 0.0 or y1 < 0.0 or x2 > 1.0 or y2 > 1.0
+        if overflow:
+            if clipped_x1 == 0.0:
+                clipped_x1 = min(BOUNDARY_EPSILON, clipped_x2 / 2.0)
+            if clipped_y1 == 0.0:
+                clipped_y1 = min(BOUNDARY_EPSILON, clipped_y2 / 2.0)
+            if clipped_x2 == 1.0:
+                clipped_x2 = max(1.0 - BOUNDARY_EPSILON, (clipped_x1 + 1.0) / 2.0)
+            if clipped_y2 == 1.0:
+                clipped_y2 = max(1.0 - BOUNDARY_EPSILON, (clipped_y1 + 1.0) / 2.0)
+            changed += 1
+
+        clean_xc = (clipped_x1 + clipped_x2) / 2.0
+        clean_yc = (clipped_y1 + clipped_y2) / 2.0
+        clean_bw = clipped_x2 - clipped_x1
+        clean_bh = clipped_y2 - clipped_y1
+        if overflow:
+            output.append(
+                f"{class_id} {clean_xc:.9f} {clean_yc:.9f} {clean_bw:.9f} {clean_bh:.9f}"
+            )
+        else:
+            output.append(" ".join(parts))
+
+    return "\n".join(output) + ("\n" if output else ""), changed
 
 
 def exact_hash(path: Path) -> str:
@@ -251,6 +312,7 @@ def main() -> None:
 
     manifest_rows: list[dict] = []
     collision_guard: set[str] = set()
+    boxes_clipped = 0
     for sample in sorted(samples, key=lambda item: (item["source_id"], item["image"].name)):
         split = assignments[sample["source_id"]]
         prefix = sanitize_source_id(sample["source_id"])
@@ -262,7 +324,11 @@ def main() -> None:
         target_image = output / "images" / split / target_name
         target_label = output / "labels" / split / f"{Path(target_name).stem}.txt"
         shutil.copy2(sample["image"], target_image)
-        shutil.copy2(sample["label"], target_label)
+        clean_text, changed = sanitize_yolo_label_text(
+            sample["label"].read_text(encoding="utf-8"), str(sample["label"])
+        )
+        target_label.write_text(clean_text, encoding="utf-8")
+        boxes_clipped += changed
         manifest_rows.append(
             {
                 "split": split,
@@ -299,6 +365,7 @@ def main() -> None:
         "splits": split_summary(assignments, dict(source_counts)),
         "near_duplicate_hamming": threshold,
         "duplicates_removed": len(duplicates),
+        "boxes_clipped_to_image_bounds": boxes_clipped,
         "duplicates": [
             {
                 "source_id": item["source_id"],
@@ -325,6 +392,7 @@ def main() -> None:
             f"({data['ratio']:.1%}) from {len(data['sources'])} source(s)"
         )
     print(f"Duplicates removed: {len(duplicates)}")
+    print(f"Boxes clipped to image bounds: {boxes_clipped}")
     print(f"Manifest: {output / 'manifest.csv'}")
     print(f"Report:   {output / 'split_report.json'}")
 
