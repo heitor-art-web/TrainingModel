@@ -59,6 +59,15 @@ class EBARDTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             remap_yolo_line("player 27.0 118.5 35.5 89.5", {})
 
+    def test_degenerate_zero_area_boxes_are_skipped(self):
+        self.assertIsNone(
+            remap_yolo_line(
+                "2 0.999609375 0.06805555555555555 0.00078125 0",
+                {2: 1},
+                image_size=(1280, 720),
+            )
+        )
+
     def test_auto_game_id_strips_frame_suffix(self):
         self.assertEqual(infer_game_id("game_ABC_frame_0012"), "game_ABC")
         self.assertEqual(infer_game_id("game_ABC-12"), "game_ABC")
