@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -102,8 +103,8 @@ def unique_name(source_dir: Path, image_path: Path) -> str:
     candidate = image_path.name
     if not (source_dir / "images" / candidate).exists():
         return candidate
-    token = abs(hash(str(image_path))) % 10_000_000
-    return f"{image_path.stem}_{token:07d}{image_path.suffix.lower()}"
+    token = hashlib.sha1(str(image_path).encode("utf-8")).hexdigest()[:10]
+    return f"{image_path.stem}_{token}{image_path.suffix.lower()}"
 
 
 def main() -> None:
