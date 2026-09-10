@@ -72,6 +72,9 @@ def remap_yolo_line(
     or named classes. Coordinates can already be normalized YOLO values, or
     absolute-pixel ``x_center y_center width height`` values. Pixel coordinates
     are normalized using the paired image dimensions.
+
+    Degenerate zero-area boxes are ignored instead of aborting the complete
+    import, because they are unusable for YOLO training.
     """
     parts = line.strip().split()
     if not parts:
@@ -102,6 +105,8 @@ def remap_yolo_line(
         if width <= 0 or height <= 0:
             raise ValueError(f"Invalid image dimensions: {image_size!r}")
         x_center, y_center, box_width, box_height = values
+        if box_width <= 0.0 or box_height <= 0.0:
+            return None
         values = [
             x_center / width,
             y_center / height,
@@ -110,9 +115,11 @@ def remap_yolo_line(
         ]
 
     x_center, y_center, box_width, box_height = values
+    if box_width <= 0.0 or box_height <= 0.0:
+        return None
     if not (0.0 <= x_center <= 1.0 and 0.0 <= y_center <= 1.0):
         raise ValueError(f"E-BARD box center outside image: {line!r}")
-    if not (0.0 < box_width <= 1.0 and 0.0 < box_height <= 1.0):
+    if not (box_width <= 1.0 and box_height <= 1.0):
         raise ValueError(f"E-BARD box size outside image: {line!r}")
 
     if not absolute_pixels:
