@@ -79,6 +79,10 @@ def main() -> None:
         images_out.mkdir(parents=True, exist_ok=True)
         labels_out.mkdir(parents=True, exist_ok=True)
 
+        source_metadata = source_dir / "source.json"
+        if source_metadata.exists():
+            shutil.copy2(source_metadata, target / "source.json")
+
         manifest_rows: list[dict] = []
         images_dir = source_dir / "images"
         labels_dir = source_dir / "labels"
