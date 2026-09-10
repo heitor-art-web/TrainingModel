@@ -15,6 +15,9 @@ All notable project and model-pipeline changes are documented here.
 - Unit tests for source protection, split policy, dataset-size policy and promotion criteria.
 - Compact local-video frame collector that preserves `source_id`, camera type and source metadata.
 - `DATASET_GUIDE.md` describing the v1.1.0 acquisition and stopping strategy.
+- E-BARD integration workflow: source-aware importer, `hoop -> rim` class remapping, preserved original converted labels, Grounding DINO backboard enrichment, distributed manual QA sampling and finalization gate.
+- `EBARD_GUIDE.md` with the complete download/import/enrich/review/finalize workflow and CC BY 4.0 provenance guidance.
+- Unit tests for E-BARD class mapping, YOLO remapping and game-ID extraction.
 
 ### Changed
 - Retired random frame-level 80/20 splitting; `scripts/split_dataset.py` now routes to the source-aware 70/15/15 builder.
@@ -23,6 +26,7 @@ All notable project and model-pipeline changes are documented here.
 - Reviewer dependencies added through `gradio_image_annotation`.
 - v1.1.0 dataset policy now has a hard ceiling of 4,000 images after deduplication; the builder and training entry point both enforce it.
 - Normal video collection defaults to 1 frame/second and 120 frames/source, with a 200-frame normal-sampling cap per source to favor diversity over repetition.
+- E-BARD `hoop` is explicitly treated as TrainingModel `rim` (class 4); `backboard` remains class 3 and is added as reviewed Grounding DINO pre-annotation rather than silently left unlabelled.
 
 ### Existing
 - Hybrid basketball detection + temporal ball tracking.
