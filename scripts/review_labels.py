@@ -14,6 +14,23 @@ if str(PROJECT_ROOT) not in sys.path:
 from training.common import load_model_config
 
 REVIEW_STATUSES = ("corrected", "already_correct", "skip", "uncertain")
+EXPLICIT_REVIEW_STATUSES = {"skip", "uncertain"}
+
+
+def infer_review_status(
+    current_text: str,
+    original_text: str,
+    requested_status: str | None,
+) -> str:
+    """Infer the normal review status while preserving explicit exceptions.
+
+    ``skip`` and ``uncertain`` are deliberate reviewer decisions and therefore
+    take precedence. For the normal QA path, unchanged labels are marked
+    ``already_correct`` and edited labels are marked ``corrected`` automatically.
+    """
+    if requested_status in EXPLICIT_REVIEW_STATUSES:
+        return requested_status
+    return "already_correct" if current_text == original_text else "corrected"
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,6 +126,15 @@ def boxes_to_yolo(annotation: dict | None, image_path: Path, class_names: list[s
             f"{class_names.index(label)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}"
         )
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def canonical_label_text(label_path: Path, image_path: Path, class_names: list[str]) -> str:
+    """Round-trip a label through the reviewer representation for stable comparison."""
+    return boxes_to_yolo(
+        {"boxes": yolo_to_boxes(label_path, image_path, class_names)},
+        image_path,
+        class_names,
+    )
 
 
 def row_has_class(batch_dir: Path, row: dict, class_name: str, class_names: list[str]) -> bool:
@@ -207,23 +233,38 @@ def main() -> None:
         annotation, info, review_status = load_index(indices[pointer])
         return indices, pointer, annotation, info, review_status, f"{pointer + 1}/{len(indices)}"
 
-    def save_current(indices: list[int], pointer: int, annotation: dict, review_status: str):
+    def save_current(
+        indices: list[int],
+        pointer: int,
+        annotation: dict,
+        review_status: str | None,
+    ) -> str:
         if not indices:
             raise gr.Error("No active review frame.")
-        if review_status not in REVIEW_STATUSES:
-            raise gr.Error("Choose a review status before leaving this frame.")
         index = indices[pointer]
         row = rows[index]
         image_path = batch_dir / "images" / row["image"]
         reviewed_path = batch_dir / row["label_reviewed"]
-        reviewed_path.write_text(
-            boxes_to_yolo(annotation, image_path, class_names), encoding="utf-8"
-        )
-        row["review_status"] = review_status
+        original_value = row.get("label_original", "")
+        original_path = batch_dir / original_value if original_value else reviewed_path
+
+        current_text = boxes_to_yolo(annotation, image_path, class_names)
+        original_text = canonical_label_text(original_path, image_path, class_names)
+        final_status = infer_review_status(current_text, original_text, review_status)
+
+        reviewed_path.write_text(current_text, encoding="utf-8")
+        row["review_status"] = final_status
         row["reviewed_at"] = datetime.now(timezone.utc).isoformat()
         write_manifest(batch_dir, rows)
+        return final_status
 
-    def move(direction: int, indices: list[int], pointer: int, annotation: dict, review_status: str):
+    def move(
+        direction: int,
+        indices: list[int],
+        pointer: int,
+        annotation: dict,
+        review_status: str | None,
+    ):
         save_current(indices, pointer, annotation, review_status)
         new_pointer = max(0, min(len(indices) - 1, pointer + direction))
         new_annotation, info, new_status = load_index(indices[new_pointer])
@@ -240,7 +281,9 @@ def main() -> None:
     with gr.Blocks(title="TrainingModel label reviewer") as demo:
         gr.Markdown(
             "# TrainingModel label reviewer\n"
-            "Edits are saved only to `labels_reviewed/`; original labels remain unchanged."
+            "Edits are saved only to `labels_reviewed/`; original labels remain unchanged.\n\n"
+            "**Save status is automatic:** unchanged frames become `already_correct`; "
+            "edited frames become `corrected`. Choose `skip` or `uncertain` only when needed."
         )
         with gr.Row():
             reason_filter = gr.Dropdown(["all", *reasons], value="all", label="Reason")
@@ -264,7 +307,9 @@ def main() -> None:
         )
         with gr.Row():
             review_status = gr.Radio(
-                list(REVIEW_STATUSES), value=initial_status, label="Frame status"
+                list(REVIEW_STATUSES),
+                value=initial_status,
+                label="Frame status (automatic unless skip/uncertain)",
             )
             progress = gr.Markdown(f"{initial_pointer + 1}/{len(initial_indices)}")
         info = gr.Markdown(initial_info)
@@ -282,7 +327,7 @@ def main() -> None:
         save_button.click(
             save_current,
             inputs=[indices_state, pointer_state, annotator, review_status],
-            outputs=[],
+            outputs=[review_status],
         )
         previous_button.click(
             lambda indices, pointer, annotation, status: move(
