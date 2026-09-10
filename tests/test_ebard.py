@@ -21,6 +21,24 @@ class EBARDTests(unittest.TestCase):
         line = remap_yolo_line("1 0.5 0.4 0.2 0.1", {1: 4})
         self.assertEqual(line, "4 0.5 0.4 0.2 0.1")
 
+    def test_named_classes_are_supported(self):
+        self.assertEqual(
+            remap_yolo_line("player 0.5 0.4 0.2 0.1", {}),
+            "1 0.5 0.4 0.2 0.1",
+        )
+        self.assertEqual(
+            remap_yolo_line("basketball 0.5 0.4 0.2 0.1", {}),
+            "0 0.5 0.4 0.2 0.1",
+        )
+        self.assertEqual(
+            remap_yolo_line("referee 0.5 0.4 0.2 0.1", {}),
+            "2 0.5 0.4 0.2 0.1",
+        )
+        self.assertEqual(
+            remap_yolo_line("hoop 0.5 0.4 0.2 0.1", {}),
+            "4 0.5 0.4 0.2 0.1",
+        )
+
     def test_auto_game_id_strips_frame_suffix(self):
         self.assertEqual(infer_game_id("game_ABC_frame_0012"), "game_ABC")
         self.assertEqual(infer_game_id("game_ABC-12"), "game_ABC")
