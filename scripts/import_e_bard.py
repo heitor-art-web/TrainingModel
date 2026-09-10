@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import sys
 
+from PIL import Image
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -80,7 +81,7 @@ def find_dataset_yaml(root: Path) -> tuple[Path, dict]:
         candidates.append((path, data))
     if not candidates:
         raise FileNotFoundError(
-            "Could not find an E-BARD YOLO dataset YAML containing basketball, "
+            "Could not find an E-BARD dataset YAML containing basketball, "
             "player, referee and hoop/rim classes."
         )
     return candidates[0]
@@ -95,7 +96,7 @@ def collect_pairs(root: Path) -> list[tuple[Path, Path]]:
         if label_path is not None:
             pairs.append((image_path, label_path))
     if not pairs:
-        raise ValueError(f"No YOLO image/label pairs found under {root}.")
+        raise ValueError(f"No E-BARD image/label pairs found under {root}.")
     return pairs
 
 
@@ -131,6 +132,8 @@ def main() -> None:
     rows_by_source: dict[str, list[dict]] = {}
     imported = 0
     class_counts = {0: 0, 1: 0, 2: 0, 4: 0}
+    normalized_lines = 0
+    pixel_lines = 0
 
     for image_path, label_path in pairs:
         game_id = infer_game_id(image_path.stem, args.source_regex)
@@ -148,9 +151,24 @@ def main() -> None:
         target_label_original = labels_original_dir / f"{Path(target_name).stem}.txt"
         target_label = labels_dir / f"{Path(target_name).stem}.txt"
 
+        with Image.open(image_path) as image:
+            image_size = image.size
+
         converted: list[str] = []
         for raw in label_path.read_text(encoding="utf-8").splitlines():
-            mapped = remap_yolo_line(raw, class_map)
+            parts = raw.strip().split()
+            if not parts:
+                continue
+            try:
+                raw_values = [float(value) for value in parts[1:5]]
+            except (ValueError, IndexError):
+                raw_values = []
+            if raw_values and any(value > 1.0 for value in raw_values):
+                pixel_lines += 1
+            elif raw_values:
+                normalized_lines += 1
+
+            mapped = remap_yolo_line(raw, class_map, image_size=image_size)
             if mapped is None:
                 continue
             converted.append(mapped)
@@ -195,7 +213,11 @@ def main() -> None:
                         "referee": 2,
                         "hoop": 4,
                     },
-                    "notes": "E-BARD hoop is intentionally treated as TrainingModel rim.",
+                    "notes": (
+                        "E-BARD hoop is intentionally treated as TrainingModel rim. "
+                        "Named absolute-pixel center-format boxes are normalized "
+                        "using the paired image dimensions when encountered."
+                    ),
                 },
                 indent=2,
             ),
@@ -206,6 +228,10 @@ def main() -> None:
     print(f"Frames imported: {imported}")
     print(f"Original games/sources detected: {len(rows_by_source)}")
     print(f"Class instances: {class_counts}")
+    print(
+        "Annotation lines: "
+        f"normalized={normalized_lines}, absolute_pixels={pixel_lines}"
+    )
     print(f"Staging output: {output_root}")
     if len(rows_by_source) < 20 or len(rows_by_source) > 100:
         print(
