@@ -15,6 +15,9 @@ from common import (
     resolve_weights,
     select_device,
 )
+from data import assert_dataset_budget, dataset_image_limit, load_data_registry
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,6 +89,17 @@ def resolve_initialization(
     return "pretrained", str(pretrained)
 
 
+def count_dataset_images(dataset_root: Path) -> int:
+    images_root = dataset_root / "images"
+    if not images_root.exists():
+        return 0
+    return sum(
+        1
+        for path in images_root.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
 def main() -> None:
     args = parse_args()
     model_config = load_model_config()
@@ -107,6 +121,17 @@ def main() -> None:
             "Build and audit the dataset before training."
         )
 
+    registry = load_data_registry()
+    dataset_images = count_dataset_images(dataset_root)
+    if dataset_images <= 0:
+        runtime_dataset.unlink(missing_ok=True)
+        raise ValueError(f"No dataset images found under {dataset_root / 'images'}.")
+    try:
+        assert_dataset_budget(dataset_images, registry)
+    except Exception:
+        runtime_dataset.unlink(missing_ok=True)
+        raise
+
     device = select_device(str(train_config.get("device", "auto")))
     runs_dir = PROJECT_ROOT / "runs" / "detect"
     run_name = f"model_v{args.version}_{init_name}"
@@ -115,6 +140,7 @@ def main() -> None:
     print(f"Initialization: {init_name}")
     print(f"Initial weights/model: {initial_weights}")
     print(f"Target model version: {args.version}")
+    print(f"Dataset images: {dataset_images}/{dataset_image_limit(registry)}")
     print(f"Training device: {device}")
 
     model = YOLO(str(initial_weights))

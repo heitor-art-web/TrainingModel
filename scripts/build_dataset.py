@@ -15,7 +15,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from training.data import (
     VALID_SPLITS,
+    assert_dataset_budget,
     assign_sources,
+    dataset_image_limit,
     get_source_policy,
     load_data_registry,
     sanitize_source_id,
@@ -229,6 +231,7 @@ def main() -> None:
 
     samples = collect_samples(sources_root, registry)
     samples, duplicates = deduplicate_samples(samples, threshold)
+    assert_dataset_budget(len(samples), registry)
 
     source_counts: dict[str, int] = defaultdict(int)
     for sample in samples:
@@ -290,6 +293,8 @@ def main() -> None:
         "configured_ratios": {
             name: float(registry["split"][name]) for name in VALID_SPLITS
         },
+        "dataset_image_limit": dataset_image_limit(registry),
+        "images_after_deduplication": len(samples),
         "source_assignments": assignments,
         "splits": split_summary(assignments, dict(source_counts)),
         "near_duplicate_hamming": threshold,
@@ -309,6 +314,10 @@ def main() -> None:
     )
 
     print("Dataset build complete.")
+    print(
+        f"Dataset images: {len(samples)}/{dataset_image_limit(registry)} "
+        "(configured hard cap)"
+    )
     for split in VALID_SPLITS:
         data = report["splits"][split]
         print(

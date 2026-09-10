@@ -9,6 +9,7 @@ import tomllib
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALID_SPLITS = ("train", "val", "test")
 RESERVED_TEST_ROLES = {"test", "gold_test"}
+PROJECT_DATASET_IMAGE_CAP = 4000
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ def load_data_registry(path: str | Path = "configs/data_sources.toml") -> dict:
     with candidate.open("rb") as file:
         registry = tomllib.load(file)
     validate_split_config(registry.get("split", {}))
+    validate_collection_config(registry.get("collection", {}))
     return registry
 
 
@@ -36,6 +38,53 @@ def validate_split_config(config: dict) -> None:
         raise ValueError("train/val/test ratios must each be between 0 and 1.")
     if abs(sum(ratios) - 1.0) > 1e-9:
         raise ValueError("train/val/test ratios must sum to 1.0.")
+
+
+def validate_collection_config(config: dict) -> None:
+    max_dataset_images = int(config.get("max_dataset_images", PROJECT_DATASET_IMAGE_CAP))
+    if max_dataset_images <= 0:
+        raise ValueError("max_dataset_images must be positive.")
+    if max_dataset_images > PROJECT_DATASET_IMAGE_CAP:
+        raise ValueError(
+            f"Project policy caps the final dataset at {PROJECT_DATASET_IMAGE_CAP} images."
+        )
+
+    default_frames = int(config.get("default_frames_per_source", 120))
+    max_frames = int(config.get("max_frames_per_source", 200))
+    if default_frames <= 0 or max_frames <= 0:
+        raise ValueError("Per-source frame limits must be positive.")
+    if default_frames > max_frames:
+        raise ValueError("default_frames_per_source cannot exceed max_frames_per_source.")
+    if max_frames > max_dataset_images:
+        raise ValueError("max_frames_per_source cannot exceed max_dataset_images.")
+
+    sample_fps = float(config.get("default_sample_fps", 1.0))
+    if sample_fps <= 0:
+        raise ValueError("default_sample_fps must be positive.")
+
+
+def dataset_image_limit(registry: dict) -> int:
+    return int(
+        registry.get("collection", {}).get(
+            "max_dataset_images", PROJECT_DATASET_IMAGE_CAP
+        )
+    )
+
+
+def assert_dataset_budget(sample_count: int, registry: dict) -> None:
+    limit = dataset_image_limit(registry)
+    if sample_count > limit:
+        raise ValueError(
+            f"Curated dataset contains {sample_count} images after deduplication, "
+            f"above the configured maximum of {limit}. Remove/review sources before training."
+        )
+
+
+def source_config(source_id: str, registry: dict) -> dict:
+    for raw in registry.get("sources", []):
+        if str(raw.get("id", "")) == source_id:
+            return dict(raw)
+    return {}
 
 
 def policies_by_id(registry: dict) -> dict[str, SourcePolicy]:

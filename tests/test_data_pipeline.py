@@ -1,8 +1,10 @@
 import unittest
 
 from training.data import (
+    assert_dataset_budget,
     assert_source_allowed,
     assign_sources,
+    validate_collection_config,
     validate_split_config,
 )
 from evaluation.compare_models import promotion_check
@@ -12,6 +14,12 @@ class DataPipelineTests(unittest.TestCase):
     def setUp(self):
         self.registry = {
             "split": {"train": 0.70, "val": 0.15, "test": 0.15, "seed": 42},
+            "collection": {
+                "max_dataset_images": 4000,
+                "default_sample_fps": 1.0,
+                "default_frames_per_source": 120,
+                "max_frames_per_source": 200,
+            },
             "sources": [
                 {
                     "id": "gold",
@@ -24,6 +32,17 @@ class DataPipelineTests(unittest.TestCase):
 
     def test_ratios_are_70_15_15(self):
         validate_split_config(self.registry["split"])
+
+    def test_collection_policy_caps_dataset_at_4000(self):
+        validate_collection_config(self.registry["collection"])
+        assert_dataset_budget(4000, self.registry)
+        with self.assertRaises(ValueError):
+            assert_dataset_budget(4001, self.registry)
+
+        invalid = dict(self.registry["collection"])
+        invalid["max_dataset_images"] = 4001
+        with self.assertRaises(ValueError):
+            validate_collection_config(invalid)
 
     def test_gold_source_is_protected_and_forced_to_test(self):
         with self.assertRaises(ValueError):
