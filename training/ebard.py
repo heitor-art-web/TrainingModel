@@ -30,11 +30,7 @@ def normalize_class_name(value: str) -> str:
 
 
 def build_class_id_map(names: dict | list) -> dict[int, int]:
-    """Map E-BARD YOLO class IDs into TrainingModel class IDs.
-
-    E-BARD `hoop` is intentionally mapped to TrainingModel `rim` (class 4).
-    Unknown source classes are ignored by the importer.
-    """
+    """Map E-BARD YOLO class IDs into TrainingModel class IDs."""
     items = names.items() if isinstance(names, dict) else enumerate(names)
     result: dict[int, int] = {}
     for source_id, source_name in items:
@@ -52,13 +48,38 @@ def build_class_id_map(names: dict | list) -> dict[int, int]:
 
 
 def _target_class_id(token: str, class_map: dict[int, int]) -> int | None:
-    """Resolve either a numeric source class ID or an E-BARD class name."""
     try:
         source_class = int(token)
     except ValueError:
         normalized = normalize_class_name(token)
         return TARGET_CLASS_IDS.get(normalized)
     return class_map.get(source_class)
+
+
+def _clip_center_box(values: list[float]) -> tuple[float, float, float, float] | None:
+    """Clip normalized center-format xywh to image bounds.
+
+    Returns None if the box has zero area or lies completely outside the image.
+    """
+    x_center, y_center, box_width, box_height = values
+    if box_width <= 0.0 or box_height <= 0.0:
+        return None
+
+    x1 = max(0.0, x_center - box_width / 2.0)
+    y1 = max(0.0, y_center - box_height / 2.0)
+    x2 = min(1.0, x_center + box_width / 2.0)
+    y2 = min(1.0, y_center + box_height / 2.0)
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    clipped_width = x2 - x1
+    clipped_height = y2 - y1
+    return (
+        (x1 + x2) / 2.0,
+        (y1 + y2) / 2.0,
+        clipped_width,
+        clipped_height,
+    )
 
 
 def remap_yolo_line(
@@ -68,13 +89,11 @@ def remap_yolo_line(
 ) -> str | None:
     """Convert one E-BARD annotation into TrainingModel YOLO format.
 
-    E-BARD material encountered in the published archive can use either numeric
-    or named classes. Coordinates can already be normalized YOLO values, or
-    absolute-pixel ``x_center y_center width height`` values. Pixel coordinates
-    are normalized using the paired image dimensions.
-
-    Degenerate zero-area boxes are ignored instead of aborting the complete
-    import, because they are unusable for YOLO training.
+    Published E-BARD material can use numeric or named classes, and either
+    normalized or absolute-pixel ``x_center y_center width height`` values.
+    Absolute coordinates are normalized using the paired image dimensions.
+    Slight annotation overflow is clipped to the image boundary. Degenerate or
+    completely out-of-frame boxes are skipped.
     """
     parts = line.strip().split()
     if not parts:
@@ -91,10 +110,7 @@ def remap_yolo_line(
     except ValueError as exc:
         raise ValueError(f"Invalid E-BARD box coordinates: {line!r}") from exc
 
-    if any(value < 0.0 for value in values):
-        raise ValueError(f"Negative E-BARD box coordinate: {line!r}")
-
-    absolute_pixels = any(value > 1.0 for value in values)
+    absolute_pixels = any(abs(value) > 1.0 for value in values)
     if absolute_pixels:
         if image_size is None:
             raise ValueError(
@@ -105,8 +121,6 @@ def remap_yolo_line(
         if width <= 0 or height <= 0:
             raise ValueError(f"Invalid image dimensions: {image_size!r}")
         x_center, y_center, box_width, box_height = values
-        if box_width <= 0.0 or box_height <= 0.0:
-            return None
         values = [
             x_center / width,
             y_center / height,
@@ -114,15 +128,13 @@ def remap_yolo_line(
             box_height / height,
         ]
 
-    x_center, y_center, box_width, box_height = values
-    if box_width <= 0.0 or box_height <= 0.0:
+    clipped = _clip_center_box(values)
+    if clipped is None:
         return None
-    if not (0.0 <= x_center <= 1.0 and 0.0 <= y_center <= 1.0):
-        raise ValueError(f"E-BARD box center outside image: {line!r}")
-    if not (box_width <= 1.0 and box_height <= 1.0):
-        raise ValueError(f"E-BARD box size outside image: {line!r}")
+    x_center, y_center, box_width, box_height = clipped
 
-    if not absolute_pixels:
+    unchanged = all(abs(a - b) < 1e-12 for a, b in zip(values, clipped))
+    if not absolute_pixels and unchanged:
         return " ".join([str(target_class), *parts[1:5]])
     return (
         f"{target_class} {x_center:.6f} {y_center:.6f} "
@@ -131,12 +143,7 @@ def remap_yolo_line(
 
 
 def infer_game_id(stem: str, source_regex: str | None = None) -> str:
-    """Infer a stable game/source ID from an E-BARD image stem.
-
-    A user supplied regex takes precedence and must expose either a named `game`
-    group or a first capture group. The automatic mode removes common frame/index
-    suffixes while keeping the rest of the filename intact.
-    """
+    """Infer a stable game/source ID from an E-BARD image stem."""
     if source_regex:
         match = re.search(source_regex, stem)
         if not match:
