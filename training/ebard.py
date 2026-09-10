@@ -30,7 +30,7 @@ def normalize_class_name(value: str) -> str:
 
 
 def build_class_id_map(names: dict | list) -> dict[int, int]:
-    """Map E-BARD numeric class IDs into TrainingModel class IDs.
+    """Map E-BARD YOLO class IDs into TrainingModel class IDs.
 
     E-BARD `hoop` is intentionally mapped to TrainingModel `rim` (class 4).
     Unknown source classes are ignored by the importer.
@@ -51,36 +51,76 @@ def build_class_id_map(names: dict | list) -> dict[int, int]:
     return result
 
 
-def resolve_source_class(token: str, class_map: dict[int, int]) -> int | None:
-    """Resolve either a numeric E-BARD class ID or a textual class name.
-
-    Some E-BARD exports use conventional YOLO numeric IDs while others place
-    labels such as `player`, `basketball`, `referee` or `hoop` in column 1.
-    Supporting both keeps the importer compatible with either export style.
-    """
+def _target_class_id(token: str, class_map: dict[int, int]) -> int | None:
+    """Resolve either a numeric source class ID or an E-BARD class name."""
     try:
-        source_id = int(token)
+        source_class = int(token)
     except ValueError:
         normalized = normalize_class_name(token)
         return TARGET_CLASS_IDS.get(normalized)
-    return class_map.get(source_id)
+    return class_map.get(source_class)
 
 
-def remap_yolo_line(line: str, class_map: dict[int, int]) -> str | None:
+def remap_yolo_line(
+    line: str,
+    class_map: dict[int, int],
+    image_size: tuple[int, int] | None = None,
+) -> str | None:
+    """Convert one E-BARD annotation into TrainingModel YOLO format.
+
+    E-BARD material encountered in the published archive can use either numeric
+    or named classes. Coordinates can already be normalized YOLO values, or
+    absolute-pixel ``x_center y_center width height`` values. Pixel coordinates
+    are normalized using the paired image dimensions.
+    """
     parts = line.strip().split()
     if not parts:
         return None
     if len(parts) < 5:
-        raise ValueError(f"Invalid YOLO annotation line: {line!r}")
+        raise ValueError(f"Invalid E-BARD annotation line: {line!r}")
 
-    target_class = resolve_source_class(parts[0], class_map)
+    target_class = _target_class_id(parts[0], class_map)
     if target_class is None:
         return None
 
-    values = [float(value) for value in parts[1:5]]
-    if any(value < 0.0 or value > 1.0 for value in values):
-        raise ValueError(f"YOLO coordinates outside [0, 1]: {line!r}")
-    return " ".join([str(target_class), *parts[1:5]])
+    try:
+        values = [float(value) for value in parts[1:5]]
+    except ValueError as exc:
+        raise ValueError(f"Invalid E-BARD box coordinates: {line!r}") from exc
+
+    if any(value < 0.0 for value in values):
+        raise ValueError(f"Negative E-BARD box coordinate: {line!r}")
+
+    absolute_pixels = any(value > 1.0 for value in values)
+    if absolute_pixels:
+        if image_size is None:
+            raise ValueError(
+                "Absolute-pixel E-BARD annotation requires image dimensions: "
+                f"{line!r}"
+            )
+        width, height = image_size
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Invalid image dimensions: {image_size!r}")
+        x_center, y_center, box_width, box_height = values
+        values = [
+            x_center / width,
+            y_center / height,
+            box_width / width,
+            box_height / height,
+        ]
+
+    x_center, y_center, box_width, box_height = values
+    if not (0.0 <= x_center <= 1.0 and 0.0 <= y_center <= 1.0):
+        raise ValueError(f"E-BARD box center outside image: {line!r}")
+    if not (0.0 < box_width <= 1.0 and 0.0 < box_height <= 1.0):
+        raise ValueError(f"E-BARD box size outside image: {line!r}")
+
+    if not absolute_pixels:
+        return " ".join([str(target_class), *parts[1:5]])
+    return (
+        f"{target_class} {x_center:.6f} {y_center:.6f} "
+        f"{box_width:.6f} {box_height:.6f}"
+    )
 
 
 def infer_game_id(stem: str, source_regex: str | None = None) -> str:
@@ -94,7 +134,9 @@ def infer_game_id(stem: str, source_regex: str | None = None) -> str:
         match = re.search(source_regex, stem)
         if not match:
             raise ValueError(f"Filename {stem!r} does not match --source-regex.")
-        value = match.groupdict().get("game") or (match.group(1) if match.groups() else match.group(0))
+        value = match.groupdict().get("game") or (
+            match.group(1) if match.groups() else match.group(0)
+        )
         if not value:
             raise ValueError(f"Could not extract game ID from {stem!r}.")
         return value
@@ -114,7 +156,7 @@ def infer_game_id(stem: str, source_regex: str | None = None) -> str:
 
 
 def source_label_path(image_path: Path) -> Path | None:
-    """Find the YOLO label paired with an image in a conventional YOLO tree."""
+    """Find the label paired with an image in a conventional images/labels tree."""
     parts = list(image_path.parts)
     image_indices = [index for index, part in enumerate(parts) if part == "images"]
     for index in reversed(image_indices):
