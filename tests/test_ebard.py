@@ -22,37 +22,17 @@ class EBARDTests(unittest.TestCase):
         self.assertEqual(line, "4 0.5 0.4 0.2 0.1")
 
     def test_named_classes_are_supported(self):
-        self.assertEqual(
-            remap_yolo_line("player 0.5 0.4 0.2 0.1", {}),
-            "1 0.5 0.4 0.2 0.1",
-        )
-        self.assertEqual(
-            remap_yolo_line("basketball 0.5 0.4 0.2 0.1", {}),
-            "0 0.5 0.4 0.2 0.1",
-        )
-        self.assertEqual(
-            remap_yolo_line("referee 0.5 0.4 0.2 0.1", {}),
-            "2 0.5 0.4 0.2 0.1",
-        )
-        self.assertEqual(
-            remap_yolo_line("hoop 0.5 0.4 0.2 0.1", {}),
-            "4 0.5 0.4 0.2 0.1",
-        )
+        self.assertEqual(remap_yolo_line("player 0.5 0.4 0.2 0.1", {}), "1 0.5 0.4 0.2 0.1")
+        self.assertEqual(remap_yolo_line("basketball 0.5 0.4 0.2 0.1", {}), "0 0.5 0.4 0.2 0.1")
+        self.assertEqual(remap_yolo_line("referee 0.5 0.4 0.2 0.1", {}), "2 0.5 0.4 0.2 0.1")
+        self.assertEqual(remap_yolo_line("hoop 0.5 0.4 0.2 0.1", {}), "4 0.5 0.4 0.2 0.1")
 
     def test_named_absolute_pixel_boxes_are_normalized(self):
-        line = remap_yolo_line(
-            "player 27.0 118.5 35.5 89.5",
-            {},
-            image_size=(704, 704),
-        )
+        line = remap_yolo_line("player 27.0 118.5 35.5 89.5", {}, image_size=(704, 704))
         self.assertEqual(line, "1 0.038352 0.168324 0.050426 0.127131")
 
     def test_numeric_absolute_pixel_boxes_are_normalized(self):
-        line = remap_yolo_line(
-            "1 352 176 70.4 140.8",
-            {1: 4},
-            image_size=(704, 704),
-        )
+        line = remap_yolo_line("1 352 176 70.4 140.8", {1: 4}, image_size=(704, 704))
         self.assertEqual(line, "4 0.500000 0.250000 0.100000 0.200000")
 
     def test_absolute_pixels_require_image_dimensions(self):
@@ -66,6 +46,19 @@ class EBARDTests(unittest.TestCase):
                 {2: 1},
                 image_size=(1280, 720),
             )
+        )
+
+    def test_slightly_out_of_bounds_absolute_box_is_clipped(self):
+        line = remap_yolo_line(
+            "player -0.002499999999990621 127.22000000000001 121.86499999999998 232.78",
+            {},
+            image_size=(1280, 720),
+        )
+        self.assertEqual(line, "1 0.023802 0.176694 0.047604 0.323306")
+
+    def test_completely_outside_box_is_skipped(self):
+        self.assertIsNone(
+            remap_yolo_line("player -200 100 50 50", {}, image_size=(1280, 720))
         )
 
     def test_auto_game_id_strips_frame_suffix(self):
