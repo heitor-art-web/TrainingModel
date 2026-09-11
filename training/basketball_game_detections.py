@@ -130,15 +130,50 @@ def _candidate_roots(yaml_path: Path, config: dict) -> list[Path]:
     return result
 
 
+def _strip_leading_parent_parts(path: Path) -> Path:
+    """Return a relative path with leading ./ and ../ components removed.
+
+    Roboflow exports commonly write split paths such as ``../train/images`` in
+    ``data.yaml`` even when the downloaded ZIP contains ``data.yaml`` beside the
+    ``train/``, ``valid/`` and ``test/`` directories. The literal relative path
+    therefore points outside the extracted dataset. This helper provides a safe
+    fallback inside the dataset root without changing valid paths that resolve
+    normally.
+    """
+    parts = list(path.parts)
+    while parts and parts[0] in {".", ".."}:
+        parts.pop(0)
+    return Path(*parts) if parts else Path()
+
+
 def _resolve_split_path(yaml_path: Path, config: dict, value: str) -> Path:
     raw = Path(str(value)).expanduser()
+    attempted: list[Path] = []
     if raw.is_absolute() and raw.exists():
         return raw.resolve()
+
     for root in _candidate_roots(yaml_path, config):
         candidate = (root / raw).resolve() if not raw.is_absolute() else root / raw.name
+        attempted.append(candidate)
         if candidate.exists():
             return candidate.resolve()
-    raise FileNotFoundError(f"Could not resolve dataset split path {value!r} from {yaml_path}.")
+
+    # Roboflow YOLO ZIPs may contain data.yaml + train/valid/test directories
+    # while data.yaml still references ../train/images, ../valid/images, etc.
+    # Only apply this fallback after the declared/literal paths failed.
+    if not raw.is_absolute():
+        local_relative = _strip_leading_parent_parts(raw)
+        if local_relative.parts:
+            candidate = (yaml_path.parent / local_relative).resolve()
+            attempted.append(candidate)
+            if candidate.exists():
+                return candidate
+
+    attempted_text = ", ".join(str(path) for path in attempted)
+    raise FileNotFoundError(
+        f"Could not resolve dataset split path {value!r} from {yaml_path}. "
+        f"Tried: {attempted_text}"
+    )
 
 
 def collect_pairs_from_yaml(
