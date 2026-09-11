@@ -7,6 +7,7 @@ import shutil
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 APPROVED = {"corrected", "already_correct"}
+NATIVE_CLASS_IDS = {0, 1, 2, 4}  # basketball, player, referee, rim
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,6 +29,29 @@ def resolve(value: str) -> Path:
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     return path.resolve()
+
+
+def native_label_text(path: Path) -> str:
+    """Return only BGD-native TrainingModel classes.
+
+    Basketball Game Detections does not provide backboard annotations. A reviewer may
+    add class 3 while inspecting a QA sample, but applying those labels to only the
+    sampled frames would create inconsistent supervision because unsampled frames
+    with visible backboards would remain unlabeled. Backboard therefore requires a
+    separate, comprehensive enrichment step and is deliberately excluded here.
+    """
+    lines: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        parts = raw.split()
+        if not parts:
+            continue
+        try:
+            class_id = int(parts[0])
+        except ValueError as exc:
+            raise ValueError(f"Invalid YOLO class id in {path}: {parts[0]!r}") from exc
+        if class_id in NATIVE_CLASS_IDS:
+            lines.append(raw)
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def main() -> None:
@@ -72,6 +96,7 @@ def main() -> None:
     destination_root.mkdir(parents=True, exist_ok=True)
     exported = 0
     reviewed_applied = 0
+    removed_backboard_boxes = 0
 
     for source_dir in sorted(path for path in root.iterdir() if path.is_dir()):
         target = destination_root / source_dir.name
@@ -109,7 +134,15 @@ def main() -> None:
                 continue
 
             shutil.copy2(image_path, images_out / image_path.name)
-            shutil.copy2(label_to_copy, labels_out / f"{image_path.stem}.txt")
+            output_label = labels_out / f"{image_path.stem}.txt"
+            if review_label is not None:
+                raw_lines = [line for line in review_label.read_text(encoding="utf-8").splitlines() if line.strip()]
+                native_text = native_label_text(review_label)
+                native_lines = [line for line in native_text.splitlines() if line.strip()]
+                removed_backboard_boxes += len(raw_lines) - len(native_lines)
+                output_label.write_text(native_text, encoding="utf-8")
+            else:
+                shutil.copy2(source_label, output_label)
             reviewed_applied += int(review_label is not None)
 
             source_row = staged_rows.get(image_path.name, {})
@@ -140,6 +173,7 @@ def main() -> None:
     print("Basketball Game Detections finalized into curated sources.")
     print(f"Frames exported: {exported}")
     print(f"QA-reviewed labels applied: {reviewed_applied}")
+    print(f"Non-native backboard boxes excluded from QA labels: {removed_backboard_boxes}")
     print(f"Destination: {destination_root}")
     print("Sources are now eligible for scripts/build_dataset.py.")
 
