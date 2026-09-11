@@ -135,6 +135,31 @@ def choose_samples(rows: list[dict], sample_size: int, seed: int) -> list[tuple[
     return selected[:sample_size]
 
 
+def reviewer_metadata(bucket: str, row: dict) -> list[dict]:
+    """Encode diagnostic signals in the list-of-detections shape expected by the reviewer."""
+    entries = [
+        {"class_name": f"diagnostic:{bucket}"},
+        {"class_name": f"origin_split:{row.get('original_split', '') or 'unknown'}"},
+        {"class_name": f"ball_size:{row.get('ball_size', '') or 'unknown'}"},
+        {"class_name": f"model_ball_count:{row.get('model_ball_count', '') or '0'}"},
+        {"class_name": f"model_ball_hit:{row.get('model_ball_hit', '') or 'false'}"},
+        {"class_name": f"model_ball_miss:{row.get('model_ball_miss', '') or 'false'}"},
+        {
+            "class_name": (
+                "model_ball_false_positive:"
+                f"{row.get('model_ball_false_positive', '') or 'false'}"
+            )
+        },
+    ]
+    confidence = row.get("model_ball_max_conf", "")
+    if confidence not in {"", None}:
+        try:
+            entries[0]["confidence"] = float(confidence)
+        except (TypeError, ValueError):
+            pass
+    return entries
+
+
 def main() -> None:
     args = parse_args()
     input_root = resolve(args.input)
@@ -184,15 +209,6 @@ def main() -> None:
         original_path.write_text(label_text + ("\n" if label_text else ""), encoding="utf-8")
         shutil.copy2(original_path, reviewed_path)
 
-        signals = {
-            "origin_image": row.get("image", ""),
-            "origin_split": row.get("original_split", ""),
-            "ball_size": row.get("ball_size", ""),
-            "model_ball_count": row.get("model_ball_count", ""),
-            "model_ball_hit": row.get("model_ball_hit", ""),
-            "model_ball_miss": row.get("model_ball_miss", ""),
-            "model_ball_false_positive": row.get("model_ball_false_positive", ""),
-        }
         review_rows.append(
             {
                 "image": batch_name,
@@ -201,7 +217,9 @@ def main() -> None:
                 "time_seconds": "",
                 "reason": f"bgd_{bucket}_diagnostic",
                 "original_confidence": row.get("model_ball_max_conf", ""),
-                "original_detections_json": json.dumps(signals, separators=(",", ":")),
+                "original_detections_json": json.dumps(
+                    reviewer_metadata(bucket, row), separators=(",", ":")
+                ),
                 "review_status": "",
                 "reviewed_at": "",
                 "label_original": f"labels_original/{batch_stem}.txt",
