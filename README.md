@@ -26,6 +26,287 @@ Weights, datasets, local videos, review data and generated runs are intentionall
 
 `rim` is the canonical class name.
 
+## INSTRUCTIONS
+
+### Beginner workflow
+
+Use this section if you want to add a new dataset and train a new model version.
+
+```text
+get data
+  ↓
+convert/group it into sources
+  ↓
+create or import labels
+  ↓
+manually review that specific dataset/source
+  ↓
+export approved data
+  ↓
+build + audit dataset
+  ↓
+train
+  ↓
+compare with previous model
+```
+
+The project always uses these class IDs:
+
+| ID | Class |
+| --- | --- |
+| 0 | basketball |
+| 1 | player |
+| 2 | referee |
+| 3 | backboard |
+| 4 | rim |
+
+### 1. Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+On future terminal sessions:
+
+```bash
+source .venv/bin/activate
+```
+
+### 2. Add new data
+
+You can use your own videos, an existing YOLO dataset, or a dataset downloaded from Hugging Face.
+
+Each independent game/video should remain a separate **source**. TrainingModel keeps a complete source in only one of `train`, `val` or `test`, which prevents frames from the same game leaking into both training and evaluation.
+
+#### Your own video
+
+```bash
+python3 scripts/collect_video_frames.py \
+  videos/game_01.mp4 \
+  --source-id game_01 \
+  --kind broadcast
+```
+
+Create initial Grounding DINO labels:
+
+```bash
+python3 scripts/autolabel.py \
+  --root local_data/collected/game_01 \
+  --skip-copy
+```
+
+Grounding DINO output is a pre-annotation, not guaranteed ground truth.
+
+### 3. Manual review — one specific dataset/source at a time
+
+Manual review is not performed blindly across the whole repository. You create a review batch for the specific dataset/source you are currently adding.
+
+For example, to review `game_01`:
+
+```bash
+python3 scripts/prepare_review.py \
+  --batch game_01_review \
+  --source-id game_01 \
+  --images local_data/collected/game_01/images \
+  --labels local_data/collected/game_01/labels
+```
+
+This creates:
+
+```text
+runs/review/game_01_review/
+├── images/
+├── labels_original/
+├── labels_reviewed/
+└── manifest.csv
+```
+
+Open that exact review batch:
+
+```bash
+python3 scripts/review_labels.py game_01_review
+```
+
+The browser reviewer lets you add, delete, move/resize and reclassify boxes. Normal status is automatic:
+
+```text
+no edits  -> already_correct
+edited    -> corrected
+```
+
+Use `skip` or `uncertain` only when needed. Original labels under `labels_original/` are preserved.
+
+When that dataset/source review is complete:
+
+```bash
+python3 scripts/export_reviewed.py game_01_review
+```
+
+Approved data is exported to:
+
+```text
+local_data/sources/game_01/
+```
+
+Repeat this process separately for every new source you want to add.
+
+### 4. Hugging Face datasets
+
+Check/install the Hugging Face CLI:
+
+```bash
+hf --help
+```
+
+If needed:
+
+```bash
+pip install -U huggingface_hub
+```
+
+Generic download pattern:
+
+```bash
+hf download \
+  OWNER/DATASET_NAME \
+  --repo-type dataset \
+  --local-dir local_data/external/DATASET_NAME
+```
+
+Different Hugging Face datasets may use YOLO, COCO JSON, Parquet, XML or another format. Before training, they must ultimately be converted into source folders such as:
+
+```text
+local_data/sources/<source_id>/
+├── images/
+└── labels/
+```
+
+Labels must use the TrainingModel class IDs listed above. Never assume an external dataset uses the same numeric class mapping. Preserve original game/video/source grouping whenever possible, and check the dataset license before using it.
+
+#### E-BARD example
+
+E-BARD already has dedicated support in this repository.
+
+```bash
+mkdir -p local_data/external/e_bard
+
+hf download \
+  GabrieleGiudici/E-BARD-detection \
+  all.zip \
+  --repo-type dataset \
+  --local-dir local_data/external/e_bard
+
+cd local_data/external/e_bard
+unzip all.zip
+cd ../../..
+
+python3 scripts/import_e_bard.py
+```
+
+A healthy import is approximately 1,800 frames from 60 games/sources.
+
+E-BARD has no native `backboard` class, so add Grounding DINO backboard pre-labels:
+
+```bash
+python3 scripts/enrich_ebard_backboard.py
+```
+
+For E-BARD, manual review uses a QA sample instead of reviewing all 1,800 frames:
+
+```bash
+python3 scripts/prepare_ebard_review.py
+python3 scripts/review_labels.py ebard_backboard_qa
+```
+
+By default this is about 4 images per game, or roughly 240 images total. If the sample looks good, finalize E-BARD:
+
+```bash
+python3 scripts/finalize_ebard.py
+```
+
+If the sample shows systematic errors, increase the review sample before finalizing. See [`EBARD_GUIDE.md`](EBARD_GUIDE.md) for the full E-BARD workflow.
+
+### 5. Build and audit the final dataset
+
+Once approved sources are under `local_data/sources/`:
+
+```bash
+python3 scripts/build_dataset.py --force
+python3 scripts/audit_dataset.py
+```
+
+The builder keeps sources together, removes duplicates, targets a 70/15/15 split and enforces the current 4,000-image maximum. Do not train until the audit passes.
+
+### 6. Train a new version
+
+To continue from the currently promoted TrainingModel:
+
+```bash
+python3 training/train.py \
+  --version NEW_VERSION \
+  --init promoted
+```
+
+Example:
+
+```bash
+python3 training/train.py --version 1.1.1 --init promoted
+```
+
+Training output is written under `runs/detect/model_vNEW_VERSION_promoted/`. Normally use `weights/best.pt` for evaluation.
+
+### 7. Evaluate the candidate
+
+Validation:
+
+```bash
+python3 evaluation/evaluate.py \
+  --weights runs/detect/model_vNEW_VERSION_promoted/weights/best.pt \
+  --split val
+```
+
+Final held-out test:
+
+```bash
+python3 evaluation/evaluate.py \
+  --weights runs/detect/model_vNEW_VERSION_promoted/weights/best.pt \
+  --split test
+```
+
+Evaluate the previous model on the same test split and compare the generated summaries:
+
+```bash
+python3 evaluation/compare_models.py \
+  runs/evaluation/<previous>/metrics_summary.json \
+  runs/evaluation/<candidate>/metrics_summary.json
+```
+
+Pay particular attention to basketball precision/recall, player recall and rim recall. Do not judge a candidate only by global mAP.
+
+### Recommended improvement loop
+
+```text
+current model
+  ↓
+real basketball videos
+  ↓
+find false positives / missed detections
+  ↓
+collect those hard frames
+  ↓
+review that specific batch
+  ↓
+add approved data
+  ↓
+fine-tune
+  ↓
+compare old vs new model
+```
+
+Useful hard cases include small/distant basketballs, motion blur, partial occlusion, ball near player hands/rim, and frames where no basketball is visible.
+
 ## v1.1.0 data policy
 
 The next dataset is intentionally compact and curated:
