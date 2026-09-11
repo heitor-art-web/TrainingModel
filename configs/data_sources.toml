@@ -8,12 +8,11 @@ test = 0.15
 seed = 42
 near_duplicate_hamming = 4
 
-# v1.1.0 is intentionally a compact, curated dataset. 4000 is a hard ceiling,
-# not a target. Normal video collection defaults to ~120 frames per source so
-# hard cases and manually selected examples still have room in the budget.
-# The v1.2.0 image budget must be decided explicitly before building that dataset.
+# v1.2.0 deliberately expands the curated dataset while retaining a hard safety
+# ceiling. 6000 is a maximum, not a target. Normal video collection remains
+# conservative so hard cases and manually selected examples still fit the budget.
 [collection]
-max_dataset_images = 4000
+max_dataset_images = 6000
 default_sample_fps = 1.0
 default_frames_per_source = 120
 max_frames_per_source = 200
