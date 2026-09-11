@@ -1,20 +1,26 @@
 # TrainingModel
 
-Basketball object-detection project built around Ultralytics YOLO, Grounding DINO-assisted labelling, temporal ball tracking and a curated-data workflow for future model iterations.
+Basketball object-detection project built around Ultralytics YOLO, Grounding DINO-assisted labelling, temporal ball tracking and a curated-data workflow for controlled model iterations.
 
 ## Current model
 
-The promoted model remains **v1.0.0**. Training a new candidate does not automatically replace it.
+The promoted model remains **v1.0.0**. Training a candidate does not automatically promote it.
 
-Default local checkpoint:
+Default promoted checkpoint:
 
 ```text
 runs/detect/yolo26b/weights/model_v1.0.0.pt
 ```
 
-Weights, datasets, local videos, review data and generated runs are intentionally excluded from Git.
+Current evaluated candidate used for hard-case mining:
 
-## Classes and product priorities
+```text
+runs/detect/model_v1.1.0_promoted/weights/best.pt
+```
+
+Weights, datasets, local videos, review batches and generated runs are intentionally excluded from Git.
+
+## Canonical classes and priorities
 
 | ID | Class | Priority |
 | --- | --- | --- |
@@ -24,170 +30,47 @@ Weights, datasets, local videos, review data and generated runs are intentionall
 | 3 | backboard | secondary |
 | 4 | rim | high; prefer higher recall |
 
-`rim` is the canonical class name.
+`rim` is the canonical project name. External classes named `hoop` are mapped to `rim`.
 
-## INSTRUCTIONS
+# INSTRUCTIONS
 
-### Beginner workflow
+This section is the operational runbook. Follow it top-to-bottom for the current **v1.2.0 data preparation and training flow**.
 
-Use this section if you want to add a new dataset and train a new model version.
-
-```text
-get data
-  ↓
-convert/group it into sources
-  ↓
-create or import labels
-  ↓
-manually review that specific dataset/source
-  ↓
-export approved data
-  ↓
-build + audit dataset
-  ↓
-train
-  ↓
-compare with previous model
-```
-
-The project always uses these class IDs:
-
-| ID | Class |
-| --- | --- |
-| 0 | basketball |
-| 1 | player |
-| 2 | referee |
-| 3 | backboard |
-| 4 | rim |
-
-### 1. Setup
+## 0. Setup
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+python3 -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-On future terminal sessions:
+On later terminal sessions:
 
 ```bash
 source .venv/bin/activate
 ```
 
-### 2. Add new data
-
-You can use your own videos, an existing YOLO dataset, or a dataset downloaded from Hugging Face.
-
-Each independent game/video should remain a separate **source**. TrainingModel keeps a complete source in only one of `train`, `val` or `test`, which prevents frames from the same game leaking into both training and evaluation.
-
-#### Your own video
+Run lightweight tests whenever pipeline code changes:
 
 ```bash
-python3 scripts/collect_video_frames.py \
-  videos/game_01.mp4 \
-  --source-id game_01 \
-  --kind broadcast
+python3 -m unittest discover -s tests -v
 ```
 
-Create initial Grounding DINO labels:
+## 1. Data rules that must always hold
 
-```bash
-python3 scripts/autolabel.py \
-  --root local_data/collected/game_01 \
-  --skip-copy
-```
+- Keep independent games/videos as independent sources whenever source identity is known.
+- Never split random neighbouring frames from the same source across train/val/test.
+- Grounding DINO is only a pre-annotation tool, never ground truth.
+- Exact and near-duplicate images must be removed before the final build.
+- `basketball` false positives are especially costly, so hard negatives matter.
+- `player` and `rim` recall are important and must not regress.
+- The protected gold-test source `OwiQgAMqyUs` must never be used for training or training-oriented hard-case mining.
+- The current v1.1.0 build/training code still enforces a **4,000-image hard cap**. Do not silently raise it. v1.2.0 requires an explicit cap decision before the final build.
 
-Grounding DINO output is a pre-annotation, not guaranteed ground truth.
+## 2. Existing curated source: E-BARD
 
-### 3. Manual review — one specific dataset/source at a time
-
-Manual review is not performed blindly across the whole repository. You create a review batch for the specific dataset/source you are currently adding.
-
-For example, to review `game_01`:
-
-```bash
-python3 scripts/prepare_review.py \
-  --batch game_01_review \
-  --source-id game_01 \
-  --images local_data/collected/game_01/images \
-  --labels local_data/collected/game_01/labels
-```
-
-This creates:
-
-```text
-runs/review/game_01_review/
-├── images/
-├── labels_original/
-├── labels_reviewed/
-└── manifest.csv
-```
-
-Open that exact review batch:
-
-```bash
-python3 scripts/review_labels.py game_01_review
-```
-
-The browser reviewer lets you add, delete, move/resize and reclassify boxes. Normal status is automatic:
-
-```text
-no edits  -> already_correct
-edited    -> corrected
-```
-
-Use `skip` or `uncertain` only when needed. Original labels under `labels_original/` are preserved.
-
-When that dataset/source review is complete:
-
-```bash
-python3 scripts/export_reviewed.py game_01_review
-```
-
-Approved data is exported to:
-
-```text
-local_data/sources/game_01/
-```
-
-Repeat this process separately for every new source you want to add.
-
-### 4. Hugging Face datasets
-
-Check/install the Hugging Face CLI:
-
-```bash
-hf --help
-```
-
-If needed:
-
-```bash
-pip install -U huggingface_hub
-```
-
-Generic download pattern:
-
-```bash
-hf download \
-  OWNER/DATASET_NAME \
-  --repo-type dataset \
-  --local-dir local_data/external/DATASET_NAME
-```
-
-Different Hugging Face datasets may use YOLO, COCO JSON, Parquet, XML or another format. Before training, they must ultimately be converted into source folders such as:
-
-```text
-local_data/sources/<source_id>/
-├── images/
-└── labels/
-```
-
-Labels must use the TrainingModel class IDs listed above. Never assume an external dataset uses the same numeric class mapping. Preserve original game/video/source grouping whenever possible, and check the dataset license before using it.
-
-#### E-BARD example
-
-E-BARD already has dedicated support in this repository.
+E-BARD support is already built into the repository.
 
 ```bash
 mkdir -p local_data/external/e_bard
@@ -203,84 +86,77 @@ unzip all.zip
 cd ../../..
 
 python3 scripts/import_e_bard.py
-```
-
-A healthy import is approximately 1,800 frames from 60 games/sources.
-
-E-BARD has no native `backboard` class, so add Grounding DINO backboard pre-labels:
-
-```bash
 python3 scripts/enrich_ebard_backboard.py
-```
-
-For E-BARD, manual review uses a QA sample instead of reviewing all 1,800 frames:
-
-```bash
 python3 scripts/prepare_ebard_review.py
 python3 scripts/review_labels.py ebard_backboard_qa
-```
-
-By default this is about 4 images per game, or roughly 240 images total. If the sample looks good, finalize E-BARD:
-
-```bash
 python3 scripts/finalize_ebard.py
 ```
 
-If the sample shows systematic errors, increase the review sample before finalizing. See [`EBARD_GUIDE.md`](EBARD_GUIDE.md) for the full E-BARD workflow.
+A healthy import is approximately 1,800 frames from 60 games/sources. E-BARD has no native `backboard` class, so the backboard step is a separate TrainingModel enrichment.
 
-#### Basketball Game Detections (planned v1.2.0 source)
+See [`EBARD_GUIDE.md`](EBARD_GUIDE.md) for the detailed E-BARD workflow.
 
-TrainingModel plans to use the **Basketball Game Detections Dataset** published by **FirstTime** on Roboflow Universe:
+## 3. v1.2.0 source: Basketball Game Detections
+
+TrainingModel uses **Basketball Game Detections Dataset** by **FirstTime** from Roboflow Universe.
 
 - Source: https://universe.roboflow.com/firsttime/basketball-game-detections
-- Publisher/host: Roboflow Universe
-- Dataset author/attribution: FirstTime
-- License declared by the dataset page: **CC BY 4.0 (Creative Commons Attribution 4.0 International)**
+- Author/attribution: FirstTime
+- Host: Roboflow Universe
+- Declared license: **CC BY 4.0**
 - License text: https://creativecommons.org/licenses/by/4.0/
 
-Under CC BY 4.0, appropriate attribution must be retained, the license must be identified/linked, and modifications to the licensed material must be indicated when the material is shared. This repository does not claim that the dataset license resolves every possible third-party right in the underlying imagery; users remain responsible for checking whether their intended use requires additional permissions.
+When shared or redistributed, retain appropriate attribution, identify/link the license, and indicate modifications. The dataset license does not automatically resolve every possible third-party right in underlying broadcast imagery, logos or likenesses.
 
-TrainingModel adapts the source annotations to its canonical class schema as follows:
+### 3.1 Class mapping
 
 | Basketball Game Detections | TrainingModel | Treatment |
 | --- | --- | --- |
 | `Ball` | `basketball` (0) | remapped |
 | `Player` | `player` (1) | remapped |
 | `Ref` | `referee` (2) | remapped |
-| `Hoop` | `rim` (4) | remapped; `rim` is the canonical project class |
+| `Hoop` | `rim` (4) | remapped |
 | `FG Attempt` | — | ignored |
 | `FG Made` | — | ignored |
 
-`backboard` (class 3) is not provided by this source and must not be invented from the `Hoop` annotation. Any later backboard enrichment must be documented separately as a TrainingModel modification/pre-annotation step.
+This source has **no native backboard label**. Do not infer `backboard` from `Hoop`, and do not add backboards only to isolated QA images. A future backboard enrichment must cover the source consistently and be documented separately.
 
-When this dataset is imported, provenance is preserved in source metadata/manifests, including the dataset name, author, source URL, CC BY 4.0 license, class remapping, ignored classes, and the fact that annotations were converted into TrainingModel's YOLO/source structure.
+### 3.2 Expected local path
 
-Do not automatically ingest every exported image. Prefer original/non-augmented images where available, preserve source/game grouping when recoverable, remove exact/near duplicates, and run dataset-specific QA before admitting the selected subset to `local_data/sources/`.
-
-##### Basketball Game Detections qualification workflow
-
-The dataset location is configurable. For example, the current Roboflow YOLO26 export can live at:
+The current Roboflow YOLO26 export can remain at:
 
 ```text
 local_data/Basketball Game Detections.v9i.yolo26/
 ```
 
-First analyze the whole external dataset without modifying curated training sources:
+A normal export contains `data.yaml` plus YOLO image/label folders. The repository resolver supports Roboflow YAML paths such as `../train/images`.
+
+## 4. Analyze Basketball Game Detections
+
+Run the analyzer once over the external dataset:
 
 ```bash
 python3 scripts/analyze_basketball_game_detections.py \
   --input "local_data/Basketball Game Detections.v9i.yolo26"
 ```
 
-By default the analyzer uses the v1.1.0 candidate checkpoint at:
+By default it uses:
 
 ```text
 runs/detect/model_v1.1.0_promoted/weights/best.pt
 ```
 
-The analysis scans labels, removes exact/near duplicates, creates ball-size buckets (`tiny`, `small`, `medium`, `large`), and records frames where v1.1.0 misses a labelled ball or predicts a ball where the source label has none. It also records no-ball hard negatives, `ball + rim` context and general diversity.
+It records:
 
-Reports are written to:
+- exact/near duplicates;
+- ball-size buckets (`tiny`, `small`, `medium`, `large`);
+- current-model ball false negatives;
+- current-model ball false positives;
+- no-ball hard negatives;
+- `ball + rim` context;
+- source grouping when it can be proven.
+
+Outputs:
 
 ```text
 runs/dataset_analysis/basketball_game_detections/
@@ -289,11 +165,13 @@ runs/dataset_analysis/basketball_game_detections/
 └── analysis_summary.json
 ```
 
-`selected_manifest.csv` is only the analyzer's first-pass selection. For v1.2.0, do not import it directly when the model-FN population is unusually large.
+For the current Roboflow v9 export, source/game identity is not proven. Therefore this dataset must remain **training-only** and must not contribute frames to validation/test.
 
-###### Pre-import diagnostic QA
+## 5. Diagnostic QA before selection
 
-Validate the surprising `model_fn` population before importing anything. This step reuses `analysis_manifest.csv`; it does **not** rerun YOLO inference:
+If the analyzer reports an unusually large `model_fn` population, validate it before importing anything.
+
+Prepare a diagnostic review batch without rerunning inference:
 
 ```bash
 python3 scripts/prepare_bgd_analysis_qa.py \
@@ -302,21 +180,44 @@ python3 scripts/prepare_bgd_analysis_qa.py \
 python3 scripts/review_labels.py bgd_model_fn_diagnostic
 ```
 
-The default diagnostic batch contains 160 frames, weighted toward model false negatives and including model-hit, false-positive and clean no-ball controls. The source labels are remapped into TrainingModel classes before review.
+Summarize reviewer statuses:
 
-This batch is **diagnostic only**. Do not run `export_reviewed.py` on it and do not add it to `local_data/sources/`. Its purpose is to answer: are the source labels trustworthy enough that the very large `model_fn` count represents real v1.1.0 misses rather than annotation problems?
+```bash
+python3 scripts/summarize_review.py bgd_model_fn_diagnostic
+```
 
-If most sampled `model_fn` rows are `already_correct`, the misses are credible hard cases. If many need correction, investigate the external labels before continuing.
+Then analyze actual box changes while ignoring `backboard`, because BGD does not provide that class:
 
-###### Refine the v1.2.0 selection without rerunning inference
+```bash
+python3 scripts/analyze_review_changes.py \
+  bgd_model_fn_diagnostic \
+  --ignore-class backboard
+```
 
-Once the diagnostic QA looks trustworthy, create the balanced v1.2.0 selection from the existing analysis manifest:
+For the current reviewed diagnostic sample:
+
+```text
+160 frames reviewed
+32 frames with relevant non-backboard changes
+model_fn: 26 / 100 with relevant changes
+model_fp: 1 / 20 with relevant changes
+model_hit_control: 5 / 20 with relevant changes
+clean_no_ball_control: 0 / 20 with relevant changes
+```
+
+This was considered acceptable to proceed with a balanced selection. The diagnostic batch itself must **not** be exported into `local_data/sources/`.
+
+## 6. Create the balanced v1.2.0 BGD selection
+
+Reuse the existing analysis manifest; this does not rerun YOLO inference:
 
 ```bash
 python3 scripts/refine_bgd_selection.py --force
 ```
 
-Default target is 3,200 images. The selector deliberately prevents `model_fn` from dominating the dataset and targets a mix of approximately:
+Current target: **3,200 images**.
+
+Target mix:
 
 ```text
 tiny_ball              180
@@ -328,7 +229,20 @@ ball_and_rim           550
 other                  350
 ```
 
-Quotas are ceilings/targets, not promises: if a bucket has fewer usable unique images, remaining capacity is filled from other diverse non-duplicate images.
+Quotas are targets/ceilings. If a bucket has fewer usable images, the selector fills remaining capacity from other diverse non-duplicate images.
+
+Current approved refined selection:
+
+```text
+selected               3200
+tiny_ball               180
+small_ball              420
+model_fn               1050
+model_fp                300
+no_ball_hard_negative   247
+ball_and_rim            550
+other                   453
+```
 
 Outputs:
 
@@ -338,118 +252,151 @@ runs/dataset_analysis/basketball_game_detections/
 └── refined_selection_summary.json
 ```
 
-This refinement reads the previous CSV only, so it is fast and does not perform model inference again.
+## 7. Stage the refined selection
 
-Roboflow filenames are not treated as proof of original game identity. If downloaded filenames/metadata contain a reliable game/video identifier, explicitly provide a regex with a `source` capture group during the original analysis, for example:
-
-```bash
-python3 scripts/analyze_basketball_game_detections.py \
-  --input "local_data/Basketball Game Detections.v9i.yolo26" \
-  --source-regex '^(?P<source>game_[0-9]+)_frame_[0-9]+' \
-  --force
-```
-
-Only use such a regex when the captured value really identifies an original independent game/video. Otherwise leave grouping unknown. Unknown grouping is deliberately imported as a **training-only** source so this external dataset cannot leak into validation/test.
-
-###### Stage the refined selection
-
-After reviewing `refined_selection_summary.json`, stage only the refined images:
+Import only the refined selection into a staging area:
 
 ```bash
 python3 scripts/import_basketball_game_detections.py \
   --input "local_data/Basketball Game Detections.v9i.yolo26"
 ```
 
-The importer now uses `refined_selection_manifest.csv` by default.
-
 Default staging output:
 
 ```text
 local_data/bgd_import/sources/bgd_training_pool/
+├── images/
+├── labels/
+├── manifest.csv
+└── source.json
 ```
 
-If reliable source groups were proven during analysis, import them separately with:
+`bgd_training_pool` is intentionally training-only while original source/game grouping remains unknown.
 
-```bash
-python3 scripts/import_basketball_game_detections.py \
-  --input "local_data/Basketball Game Detections.v9i.yolo26" \
-  --use-proven-source-groups
-```
+## 8. Final BGD QA
 
-###### Final staged-data QA
-
-Before staged data becomes eligible for training, create a stratified QA sample. The default is 320 frames spread across current-model false negatives, false positives, tiny/small-ball cases, no-ball hard negatives, `ball + rim` and general examples:
+Prepare the final stratified QA sample from staged data:
 
 ```bash
 python3 scripts/prepare_bgd_review.py
 python3 scripts/review_labels.py bgd_qa
 ```
 
-Every sampled QA row must finish as `corrected` or `already_correct`. If the sample reveals systematic label problems, do not finalize; increase the QA sample and review again:
+Default sample size: **320 frames**.
+
+Do **not** add backboard boxes during this BGD QA. Review only the classes natively supplied/mapped by this source:
+
+```text
+basketball
+player
+referee
+rim
+```
+
+After review, summarize it:
+
+```bash
+python3 scripts/summarize_review.py bgd_qa
+```
+
+If the QA exposes a systematic problem, stop and inspect it before finalizing. You can create a larger sample if needed:
 
 ```bash
 python3 scripts/prepare_bgd_review.py --sample-size 600 --force
 python3 scripts/review_labels.py bgd_qa
+python3 scripts/summarize_review.py bgd_qa
 ```
 
-When the QA sample is clean:
+Every final QA row must end as `already_correct` or `corrected` before finalization.
+
+## 9. Finalize BGD into curated sources
+
+When final QA is acceptable:
 
 ```bash
 python3 scripts/finalize_bgd.py
 ```
 
-This copies the staged selected dataset into `local_data/sources/`, applying manually corrected labels to sampled frames and retaining provenance for all imported frames. `bgd_training_pool` is explicitly registered with `role = "train"` in `configs/data_sources.toml` while original game grouping remains unknown.
+This copies the staged BGD source into:
 
-The current 4,000-image hard cap belongs to the v1.1.0 policy. **Do not silently raise it.** Decide the v1.2.0 dataset budget explicitly after inspecting the Basketball Game Detections analysis/refined-selection reports, then update the configured cap before building/training v1.2.0.
+```text
+local_data/sources/bgd_training_pool/
+```
 
-### 5. Build and audit the final dataset
+Reviewed corrections are applied only for the native BGD classes. Backboard labels are stripped from BGD during finalization so the source remains internally consistent.
 
-Once approved sources are under `local_data/sources/`:
+## 10. STOP: choose the v1.2.0 dataset cap
+
+At this point the expected curated volume is approximately:
+
+```text
+existing curated/E-BARD   ~1796
+BGD refined selection     +3200
+                          -----
+before global dedup       ~4996
+```
+
+The repository still enforces the v1.1.0 **4,000-image hard cap** in the builder/training path.
+
+**Do not run the final build for v1.2.0 until the cap has been explicitly changed and documented.**
+
+The intended v1.2.0 policy is to allow deliberate growth while retaining a hard safety ceiling; the exact new ceiling must be chosen explicitly before editing the configuration/code.
+
+## 11. Build and audit the final dataset
+
+Only after the v1.2.0 cap has been approved and updated:
 
 ```bash
 python3 scripts/build_dataset.py --force
 python3 scripts/audit_dataset.py
 ```
 
-The builder keeps sources together, removes duplicates, targets a 70/15/15 split and enforces the current 4,000-image maximum. Do not train until the audit passes.
+The build must:
 
-### 6. Train a new version
+- keep proven sources together;
+- force `bgd_training_pool` to train only;
+- preserve protected evaluation sources;
+- remove exact/near duplicates globally;
+- target roughly 70/15/15 where source constraints allow;
+- pass the dataset audit before training.
 
-To continue from the currently promoted TrainingModel:
+Do not train if the audit fails.
+
+## 12. Train v1.2.0
+
+Initialize from the currently promoted model unless the experiment explicitly says otherwise:
 
 ```bash
-python3 training/train.py \
-  --version NEW_VERSION \
-  --init promoted
+python3 training/train.py --version 1.2.0 --init promoted
 ```
 
-Example:
+Expected output:
 
-```bash
-python3 training/train.py --version 1.1.1 --init promoted
+```text
+runs/detect/model_v1.2.0_promoted/weights/best.pt
 ```
 
-Training output is written under `runs/detect/model_vNEW_VERSION_promoted/`. Normally use `weights/best.pt` for evaluation.
+Training a candidate does not promote it automatically.
 
-### 7. Evaluate the candidate
+## 13. Evaluate v1.2.0
 
 Validation:
 
 ```bash
 python3 evaluation/evaluate.py \
-  --weights runs/detect/model_vNEW_VERSION_promoted/weights/best.pt \
+  --weights runs/detect/model_v1.2.0_promoted/weights/best.pt \
   --split val
 ```
 
-Final held-out test:
+Held-out test:
 
 ```bash
 python3 evaluation/evaluate.py \
-  --weights runs/detect/model_vNEW_VERSION_promoted/weights/best.pt \
+  --weights runs/detect/model_v1.2.0_promoted/weights/best.pt \
   --split test
 ```
 
-Evaluate the previous model on the same test split and compare the generated summaries:
+Compare against the previous model on the **same test split**:
 
 ```bash
 python3 evaluation/compare_models.py \
@@ -457,89 +404,17 @@ python3 evaluation/compare_models.py \
   runs/evaluation/<candidate>/metrics_summary.json
 ```
 
-Pay particular attention to basketball precision/recall, player recall and rim recall. Do not judge a candidate only by global mAP.
+Promotion priorities:
 
-### Recommended improvement loop
+- `basketball`: precision is critical; do not accept a major false-positive regression;
+- `basketball`: operational recall must also be checked because static mAP alone was misleading for v1.1.0;
+- `player`: recall must not materially regress;
+- `rim`: recall must not materially regress;
+- compare temporal/tracking behaviour on representative real videos as well as static metrics.
 
-```text
-current model
-  ↓
-real basketball videos
-  ↓
-find false positives / missed detections
-  ↓
-collect those hard frames
-  ↓
-review that specific batch
-  ↓
-add approved data
-  ↓
-fine-tune
-  ↓
-compare old vs new model
-```
+## 14. Generic workflow for adding your own source
 
-Useful hard cases include small/distant basketballs, motion blur, partial occlusion, ball near player hands/rim, and frames where no basketball is visible.
-
-## v1.1.0 data policy
-
-The next dataset is intentionally compact and curated:
-
-- **maximum 4,000 images after deduplication**; this is a hard ceiling, not a target;
-- 2,500–3,500 strong images are preferable to filling the cap with repetitive frames;
-- target split is **70% train / 15% validation / 15% test**;
-- splitting is by complete **video/source**, never by individual random frames;
-- one source can exist in only one split;
-- exact and near-duplicate frames are removed before the split;
-- hard negatives where no basketball is visible are valid and important training examples;
-- Grounding DINO is a pre-labelling assistant, not ground truth;
-- selected hard cases are manually reviewed;
-- `skip` and `uncertain` review rows are excluded from curated training data;
-- historical `dataset/`, `dataset_1/` and `dataset_1.1/` are reference sources only;
-- the gold test is fully manually reviewed and never used for training or training-oriented hard-case mining.
-
-Detailed collection guidance is in [`DATASET_GUIDE.md`](DATASET_GUIDE.md).
-
-The source registry and collection limits live in `configs/data_sources.toml`.
-
-The first protected gold-test source is:
-
-```text
-source id: OwiQgAMqyUs
-role: gold_test
-segment: approximately the first 60 seconds
-training: forbidden
-```
-
-Only use footage that you have the necessary rights/permission to use. This repository does not download remote videos.
-
-## Setup
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-## Use v1.0.0 without training
-
-```bash
-python3 scripts/inference.py videos/game.mp4
-python3 scripts/ball_tracker.py videos/game.mp4
-```
-
-Extract representative ball failures:
-
-```bash
-python3 scripts/extract_ball_failures.py videos/game.mp4
-```
-
-The extractor records representative `predicted`, `lost`, `low_confidence` and `large_jump` frames under `runs/hard_cases/<video_name>/`.
-
-## 1. Collect a compact sample from each video
-
-Do not extract every frame. Use a stable source ID and classify the camera type:
+Collect sparse frames:
 
 ```bash
 python3 scripts/collect_video_frames.py \
@@ -548,29 +423,46 @@ python3 scripts/collect_video_frames.py \
   --kind broadcast
 ```
 
-Supported source kinds are `broadcast`, `fixed_camera`, `stands`, `smartphone` and `other`.
+Create Grounding DINO pre-annotations:
 
-Default collection policy:
-
-```text
-normal sampling: 1 frame/second
-normal frames/source: 120 by default
-absolute normal frames/source: 200
-final dataset maximum: 4000 images
+```bash
+python3 scripts/autolabel.py \
+  --root local_data/collected/game_01 \
+  --skip-copy
 ```
 
-The output is kept local:
+Prepare and review that source only:
 
-```text
-local_data/collected/game_01/
-├── images/
-├── manifest.csv
-└── source.json
+```bash
+python3 scripts/prepare_review.py \
+  --batch game_01_review \
+  --source-id game_01 \
+  --images local_data/collected/game_01/images \
+  --labels local_data/collected/game_01/labels
+
+python3 scripts/review_labels.py game_01_review
 ```
 
-If you need more diversity, add another independent source instead of increasing the frame count of the same video.
+Export approved rows:
 
-For the protected gold test, use an authorized local copy and evaluation purpose:
+```bash
+python3 scripts/export_reviewed.py game_01_review
+```
+
+Only `already_correct` and `corrected` rows are eligible for curated data. `skip` and `uncertain` are excluded.
+
+## 15. Protected gold test
+
+The first protected source is:
+
+```text
+source id: OwiQgAMqyUs
+role: gold_test
+segment: approximately first 60 seconds
+training: forbidden
+```
+
+When collecting an authorized local copy for evaluation:
 
 ```bash
 python3 scripts/collect_video_frames.py \
@@ -580,231 +472,15 @@ python3 scripts/collect_video_frames.py \
   --purpose evaluation
 ```
 
-Its registered ~0–60 second segment is used automatically unless explicitly overridden.
+The gold test must never be used for training, threshold tuning or training-oriented hard-case mining.
 
-## 2. Prepare labels with Grounding DINO
+# Historical v1.1.0 policy
 
-Auto-label a collected source in place:
+The v1.1.0 dataset policy used a maximum of **4,000 images after deduplication** and source-aware 70/15/15 splitting. That ceiling remains enforced by current builder/training code until the v1.2.0 policy is explicitly adopted.
 
-```bash
-python3 scripts/autolabel.py \
-  --root local_data/collected/game_01 \
-  --skip-copy
-```
+The v1.1.0 candidate clearly improved the supervised static benchmark versus v1.0.0, but did not automatically improve the P1 temporal pipeline at the previously tuned threshold. Therefore v1.2.0 evaluation must include both static detection metrics and operational/temporal behaviour.
 
-Configuration lives in `configs/autolabel.toml`. Auto-label output is only a starting point, especially for small, blurred or occluded basketballs.
-
-The legacy default layout is still supported with:
-
-```bash
-python3 scripts/autolabel.py
-```
-
-## 3. Prepare a review batch
-
-For hard cases:
-
-```bash
-python3 scripts/prepare_review.py \
-  --batch game_01_ball_failures \
-  --source-id game_01 \
-  --hard-cases runs/hard_cases/game_01
-```
-
-For arbitrary image/YOLO-label folders:
-
-```bash
-python3 scripts/prepare_review.py \
-  --batch game_01_sample \
-  --source-id game_01 \
-  --images /path/to/images \
-  --labels /path/to/labels
-```
-
-A review batch is non-destructive:
-
-```text
-runs/review/<batch>/
-├── images/
-├── labels_original/
-├── labels_reviewed/
-└── manifest.csv
-```
-
-For a protected gold-test source, preparation must be evaluation-only.
-
-## 4. Review locally
-
-```bash
-python3 scripts/review_labels.py game_01_ball_failures
-```
-
-The reviewer supports all five classes and lets you add, move/resize, delete and reclassify boxes. It also supports filters and the statuses:
-
-```text
-corrected
-already_correct
-skip
-uncertain
-```
-
-Navigation saves automatically. Original labels are never overwritten.
-
-## 5. Export approved reviewed data
-
-```bash
-python3 scripts/export_reviewed.py game_01_ball_failures
-```
-
-Only `corrected` and `already_correct` rows are exported into:
-
-```text
-local_data/sources/<source_id>/
-├── images/
-├── labels/
-└── manifest.csv
-```
-
-Review every selected gold-test frame before export. Training sources only need selective review of hard/high-risk cases plus quality-control samples.
-
-## 6. Build the dataset
-
-```bash
-python3 scripts/build_dataset.py
-```
-
-To intentionally replace an existing local dataset:
-
-```bash
-python3 scripts/build_dataset.py --force
-```
-
-The builder:
-
-1. reads complete source folders under `local_data/sources/`;
-2. honors explicit/protected source roles;
-3. removes exact and near-duplicate images globally;
-4. **refuses to build if more than 4,000 images remain after deduplication**;
-5. assigns every complete source to exactly one split;
-6. targets 70/15/15 while respecting source boundaries;
-7. writes `dataset/manifest.csv` and `dataset/split_report.json`.
-
-Result:
-
-```text
-dataset/
-├── images/
-│   ├── train/
-│   ├── val/
-│   └── test/
-├── labels/
-│   ├── train/
-│   ├── val/
-│   └── test/
-├── manifest.csv
-└── split_report.json
-```
-
-Exact proportions can vary slightly because a video is never split across subsets.
-
-`python3 scripts/split_dataset.py` remains as a compatibility command and now routes to the source-aware builder; the old random 80/20 frame split is retired.
-
-## 7. Audit before training
-
-```bash
-python3 scripts/audit_dataset.py
-```
-
-Fix structural/label issues before training. Empty YOLO labels are allowed when the image deliberately contains none of the five annotated classes.
-
-## 8. Train controlled v1.1.0 candidates
-
-Candidate A — initialize from promoted v1.0.0:
-
-```bash
-python3 training/train.py --version 1.1.0 --init promoted
-```
-
-Candidate B — initialize from the generic pretrained YOLO base:
-
-```bash
-python3 training/train.py --version 1.1.0 --init pretrained
-```
-
-The training command independently counts dataset images and **refuses to start above the 4,000-image policy cap**, including datasets prepared manually outside the builder.
-
-Outputs are separated:
-
-```text
-runs/detect/
-├── model_v1.1.0_promoted/weights/best.pt
-└── model_v1.1.0_pretrained/weights/best.pt
-```
-
-Keep dataset, epochs, image size, learning rate and other parameters identical between the A/B runs unless deliberately changing the experiment.
-
-## 9. Evaluate candidates
-
-Development validation:
-
-```bash
-python3 evaluation/evaluate.py \
-  --weights runs/detect/model_v1.1.0_promoted/weights/best.pt \
-  --split val
-```
-
-Held-out test:
-
-```bash
-python3 evaluation/evaluate.py \
-  --weights runs/detect/model_v1.1.0_promoted/weights/best.pt \
-  --split test
-```
-
-Compare summaries:
-
-```bash
-python3 evaluation/compare_models.py \
-  runs/evaluation/<baseline>/metrics_summary.json \
-  runs/evaluation/<candidate>/metrics_summary.json
-```
-
-Promotion priorities remain:
-
-- `basketball`: precision should improve;
-- `player`: recall must not worsen;
-- `rim`: recall must not worsen.
-
-Also compare temporal tracking continuity and behaviour across representative real videos. The test set must not be used to tune training parameters or thresholds.
-
-## End-to-end v1.1.0 flow
-
-```text
-varied local videos / images
-        ↓
-collect sparse normal frames with stable source IDs
-        ↓
-v1.0.0 hard-case mining + Grounding DINO pre-labels
-        ↓
-selective manual review + gold-test full review
-        ↓
-approved curated sources + hard negatives
-        ↓
-deduplication + hard 4000-image ceiling
-        ↓
-70% train / 15% val / 15% test by source
-        ↓
-dataset audit
-        ↓
-A: v1.0.0 initialization
-B: pretrained initialization
-        ↓
-validation + held-out test + tracking review
-        ↓
-promote only if agreed priorities improve
-```
-
-## Tests and CI
+# Tests and CI
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -812,9 +488,11 @@ python3 -m unittest discover -s tests -v
 
 GitHub Actions runs syntax and lightweight unit tests on pushes to `main` and pull requests. Training itself is never run in CI.
 
-## Apple Silicon
+# Apple Silicon
 
-Automatic device selection prefers CUDA, then Apple MPS, then CPU. Check MPS with:
+Automatic device selection prefers CUDA, then Apple MPS, then CPU.
+
+Check MPS with:
 
 ```bash
 python3 -c "import torch; print(torch.backends.mps.is_available())"
