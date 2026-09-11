@@ -35,6 +35,16 @@ def parse_args() -> argparse.Namespace:
         default=0.70,
         help="Minimum IoU for treating unmatched cross-class boxes as reclassified.",
     )
+    parser.add_argument(
+        "--ignore-class",
+        action="append",
+        default=[],
+        choices=CLASS_NAMES,
+        help=(
+            "Ignore this class when counting changed frames. Repeat the option to "
+            "ignore multiple classes. Per-class raw statistics are still printed."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -123,6 +133,7 @@ def greedy_pairs(
 
 def main() -> None:
     args = parse_args()
+    ignored_ids = {CLASS_NAMES.index(name) for name in args.ignore_class}
     batch_dir = resolve_batch(args.batch)
     with (batch_dir / "manifest.csv").open("r", encoding="utf-8", newline="") as file:
         rows = list(csv.DictReader(file))
@@ -195,18 +206,30 @@ def main() -> None:
             frame_changed_classes.add(box["class_id"])
 
         if frame_changed_classes:
-            totals["frames_with_box_changes"] += 1
-            reason_stats[reason]["frames_with_box_changes"] += 1
+            totals["frames_with_any_box_changes"] += 1
+            reason_stats[reason]["frames_with_any_box_changes"] += 1
             for class_id in frame_changed_classes:
                 class_stats[class_id]["frames_changed"] += 1
 
+        relevant_changed_classes = frame_changed_classes - ignored_ids
+        if relevant_changed_classes:
+            totals["frames_with_box_changes"] += 1
+            reason_stats[reason]["frames_with_box_changes"] += 1
+
     print(f"Batch: {batch_dir}")
     print(f"Frames: {totals['frames']}")
-    print(f"Frames with box changes: {totals['frames_with_box_changes']}")
+    if args.ignore_class:
+        print(f"Ignored classes for changed-frame totals: {', '.join(args.ignore_class)}")
+        print(f"Frames with any box changes: {totals['frames_with_any_box_changes']}")
+        print(f"Frames with relevant box changes: {totals['frames_with_box_changes']}")
+    else:
+        print(f"Frames with box changes: {totals['frames_with_box_changes']}")
+
     print("\nBy class:")
     for class_id, class_name in enumerate(CLASS_NAMES):
         stats = class_stats[class_id]
-        print(f"  {class_name}:")
+        suffix = " (ignored in changed-frame totals)" if class_id in ignored_ids else ""
+        print(f"  {class_name}{suffix}:")
         print(
             "    original={original_boxes}, reviewed={reviewed_boxes}, added={added}, "
             "deleted={deleted}, geometry_changed={geometry_changed}, "
@@ -236,9 +259,15 @@ def main() -> None:
     print("\nBy reason:")
     for reason in sorted(reason_stats):
         stats = reason_stats[reason]
+        if args.ignore_class:
+            change_text = (
+                f"any_box_changes={stats['frames_with_any_box_changes']}, "
+                f"relevant_box_changes={stats['frames_with_box_changes']}"
+            )
+        else:
+            change_text = f"box_changes={stats['frames_with_box_changes']}"
         print(
-            f"  {reason}: frames={stats['frames']}, "
-            f"box_changes={stats['frames_with_box_changes']}, "
+            f"  {reason}: frames={stats['frames']}, {change_text}, "
             f"already_correct={stats['status:already_correct']}, "
             f"corrected={stats['status:corrected']}, "
             f"skip={stats['status:skip']}, uncertain={stats['status:uncertain']}"
