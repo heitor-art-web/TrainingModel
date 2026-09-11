@@ -15,7 +15,7 @@ class DataPipelineTests(unittest.TestCase):
         self.registry = {
             "split": {"train": 0.70, "val": 0.15, "test": 0.15, "seed": 42},
             "collection": {
-                "max_dataset_images": 4000,
+                "max_dataset_images": 6000,
                 "default_sample_fps": 1.0,
                 "default_frames_per_source": 120,
                 "max_frames_per_source": 200,
@@ -33,14 +33,14 @@ class DataPipelineTests(unittest.TestCase):
     def test_ratios_are_70_15_15(self):
         validate_split_config(self.registry["split"])
 
-    def test_collection_policy_caps_dataset_at_4000(self):
+    def test_collection_policy_caps_dataset_at_6000(self):
         validate_collection_config(self.registry["collection"])
-        assert_dataset_budget(4000, self.registry)
+        assert_dataset_budget(6000, self.registry)
         with self.assertRaises(ValueError):
-            assert_dataset_budget(4001, self.registry)
+            assert_dataset_budget(6001, self.registry)
 
         invalid = dict(self.registry["collection"])
-        invalid["max_dataset_images"] = 4001
+        invalid["max_dataset_images"] = 6001
         with self.assertRaises(ValueError):
             validate_collection_config(invalid)
 
