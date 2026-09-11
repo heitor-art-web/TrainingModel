@@ -4,6 +4,7 @@ from pathlib import Path
 
 from training.basketball_game_detections import (
     YoloObject,
+    _resolve_split_path,
     ball_size_bucket,
     box_iou,
     build_class_map,
@@ -62,6 +63,22 @@ class BasketballGameDetectionsTests(unittest.TestCase):
             ),
             "game_001",
         )
+
+    def test_resolve_roboflow_parent_relative_split_inside_export_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Basketball Game Detections.v9i.yolo26"
+            images = root / "train" / "images"
+            images.mkdir(parents=True)
+            yaml_path = root / "data.yaml"
+            yaml_path.write_text("train: ../train/images\n", encoding="utf-8")
+
+            resolved = _resolve_split_path(
+                yaml_path,
+                {"train": "../train/images"},
+                "../train/images",
+            )
+
+            self.assertEqual(resolved, images.resolve())
 
 
 if __name__ == "__main__":
