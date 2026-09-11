@@ -12,7 +12,7 @@ Default promoted checkpoint:
 runs/detect/yolo26b/weights/model_v1.0.0.pt
 ```
 
-Current evaluated candidate used for hard-case mining:
+The evaluated v1.1.0 candidate used for BGD hard-case mining is:
 
 ```text
 runs/detect/model_v1.1.0_promoted/weights/best.pt
@@ -34,7 +34,7 @@ Weights, datasets, local videos, review batches and generated runs are intention
 
 # INSTRUCTIONS
 
-This section is the operational runbook. Follow it top-to-bottom for the current **v1.2.0 data preparation and training flow**.
+This is the operational runbook for the current **v1.2.0** workflow. Follow it top-to-bottom. Optional/diagnostic steps are explicitly marked as such.
 
 ## 0. Setup
 
@@ -51,22 +51,31 @@ On later terminal sessions:
 source .venv/bin/activate
 ```
 
-Run lightweight tests whenever pipeline code changes:
+After pulling pipeline changes, run:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-## 1. Data rules that must always hold
+## 1. Non-negotiable data rules
 
 - Keep independent games/videos as independent sources whenever source identity is known.
-- Never split random neighbouring frames from the same source across train/val/test.
+- Never randomly split neighbouring frames from one source across train/val/test.
 - Grounding DINO is only a pre-annotation tool, never ground truth.
-- Exact and near-duplicate images must be removed before the final build.
+- Exact and near-duplicate images are removed before the final build.
 - `basketball` false positives are especially costly, so hard negatives matter.
-- `player` and `rim` recall are important and must not regress.
-- The protected gold-test source `OwiQgAMqyUs` must never be used for training or training-oriented hard-case mining.
-- The current v1.1.0 build/training code still enforces a **4,000-image hard cap**. Do not silently raise it. v1.2.0 requires an explicit cap decision before the final build.
+- `player` and `rim` recall are important and must not materially regress.
+- Protected evaluation sources must never enter training or training-oriented hard-case mining.
+- The v1.2.0 project hard ceiling is **6,000 images after deduplication**. It is a ceiling, not a target.
+
+The active limit is defined in:
+
+```text
+configs/data_sources.toml
+training/data.py
+```
+
+Training validates the same policy before starting.
 
 ## 2. Existing curated source: E-BARD
 
@@ -92,7 +101,7 @@ python3 scripts/review_labels.py ebard_backboard_qa
 python3 scripts/finalize_ebard.py
 ```
 
-A healthy import is approximately 1,800 frames from 60 games/sources. E-BARD has no native `backboard` class, so the backboard step is a separate TrainingModel enrichment.
+A healthy import is approximately 1,800 frames from 60 games/sources. E-BARD has no native `backboard` class, so backboard enrichment is a separate TrainingModel modification.
 
 See [`EBARD_GUIDE.md`](EBARD_GUIDE.md) for the detailed E-BARD workflow.
 
@@ -106,9 +115,9 @@ TrainingModel uses **Basketball Game Detections Dataset** by **FirstTime** from 
 - Declared license: **CC BY 4.0**
 - License text: https://creativecommons.org/licenses/by/4.0/
 
-When shared or redistributed, retain appropriate attribution, identify/link the license, and indicate modifications. The dataset license does not automatically resolve every possible third-party right in underlying broadcast imagery, logos or likenesses.
+When sharing or redistributing adapted data, retain appropriate attribution, identify/link the license and indicate modifications. The dataset license does not automatically resolve every possible third-party right in underlying broadcast imagery, logos or likenesses.
 
-### 3.1 Class mapping
+### Class mapping
 
 | Basketball Game Detections | TrainingModel | Treatment |
 | --- | --- | --- |
@@ -119,21 +128,21 @@ When shared or redistributed, retain appropriate attribution, identify/link the 
 | `FG Attempt` | — | ignored |
 | `FG Made` | — | ignored |
 
-This source has **no native backboard label**. Do not infer `backboard` from `Hoop`, and do not add backboards only to isolated QA images. A future backboard enrichment must cover the source consistently and be documented separately.
+BGD has **no native backboard label**. Do not infer `backboard` from `Hoop`, and do not add backboards only to isolated BGD images. Any future backboard enrichment must be complete/consistent across the source and documented separately.
 
-### 3.2 Expected local path
+### Expected local path
 
-The current Roboflow YOLO26 export can remain at:
+Current Roboflow YOLO26 export:
 
 ```text
 local_data/Basketball Game Detections.v9i.yolo26/
 ```
 
-A normal export contains `data.yaml` plus YOLO image/label folders. The repository resolver supports Roboflow YAML paths such as `../train/images`.
+The repository resolver supports common Roboflow YAML paths such as `../train/images`.
 
-## 4. Analyze Basketball Game Detections
+## 4. Analyze BGD once
 
-Run the analyzer once over the external dataset:
+Run the analyzer over the external dataset:
 
 ```bash
 python3 scripts/analyze_basketball_game_detections.py \
@@ -146,15 +155,7 @@ By default it uses:
 runs/detect/model_v1.1.0_promoted/weights/best.pt
 ```
 
-It records:
-
-- exact/near duplicates;
-- ball-size buckets (`tiny`, `small`, `medium`, `large`);
-- current-model ball false negatives;
-- current-model ball false positives;
-- no-ball hard negatives;
-- `ball + rim` context;
-- source grouping when it can be proven.
+It records duplicates, ball-size buckets, current-model ball false negatives/false positives, no-ball hard negatives, `ball + rim` context and source grouping when provenance can actually be proven.
 
 Outputs:
 
@@ -165,36 +166,31 @@ runs/dataset_analysis/basketball_game_detections/
 └── analysis_summary.json
 ```
 
-For the current Roboflow v9 export, source/game identity is not proven. Therefore this dataset must remain **training-only** and must not contribute frames to validation/test.
+Do **not** automatically import `selected_manifest.csv`. It is only a first-pass selection.
 
-## 5. Diagnostic QA before selection
+For the current Roboflow v9 export, original game/source identity was not proven, so BGD is intentionally registered as **training-only** (`bgd_training_pool`). It must not contribute to validation/test.
 
-If the analyzer reports an unusually large `model_fn` population, validate it before importing anything.
+## 5. Diagnostic QA — use when analyzer results look suspicious
 
-Prepare a diagnostic review batch without rerunning inference:
+This is a **qualification/debugging step**, not a dataset-export step.
+
+For the current BGD v9 run, the very large `model_fn` population justified this check:
 
 ```bash
 python3 scripts/prepare_bgd_analysis_qa.py \
   --input "local_data/Basketball Game Detections.v9i.yolo26"
 
 python3 scripts/review_labels.py bgd_model_fn_diagnostic
-```
-
-Summarize reviewer statuses:
-
-```bash
 python3 scripts/summarize_review.py bgd_model_fn_diagnostic
-```
 
-Then analyze actual box changes while ignoring `backboard`, because BGD does not provide that class:
-
-```bash
 python3 scripts/analyze_review_changes.py \
   bgd_model_fn_diagnostic \
   --ignore-class backboard
 ```
 
-For the current reviewed diagnostic sample:
+The diagnostic reviewer status alone can be misleading because tiny geometry edits and adding a non-native `backboard` can mark a row as `corrected`. Use `analyze_review_changes.py` to measure meaningful native-class edits.
+
+Observed diagnostic result for the current run:
 
 ```text
 160 frames reviewed
@@ -205,11 +201,13 @@ model_hit_control: 5 / 20 with relevant changes
 clean_no_ball_control: 0 / 20 with relevant changes
 ```
 
-This was considered acceptable to proceed with a balanced selection. The diagnostic batch itself must **not** be exported into `local_data/sources/`.
+This was accepted as sufficient to continue.
 
-## 6. Create the balanced v1.2.0 BGD selection
+**Never run `export_reviewed.py` on this diagnostic batch.**
 
-Reuse the existing analysis manifest; this does not rerun YOLO inference:
+## 6. Create the balanced BGD selection
+
+Reuse the existing analysis manifest; no YOLO inference is rerun:
 
 ```bash
 python3 scripts/refine_bgd_selection.py --force
@@ -217,7 +215,7 @@ python3 scripts/refine_bgd_selection.py --force
 
 Current target: **3,200 images**.
 
-Target mix:
+Target quotas:
 
 ```text
 tiny_ball              180
@@ -229,9 +227,9 @@ ball_and_rim           550
 other                  350
 ```
 
-Quotas are targets/ceilings. If a bucket has fewer usable images, the selector fills remaining capacity from other diverse non-duplicate images.
+Quotas are targets/ceilings. If one bucket contains fewer usable unique images, remaining capacity is filled from other diverse images.
 
-Current approved refined selection:
+Current accepted selection:
 
 ```text
 selected               3200
@@ -244,6 +242,16 @@ ball_and_rim            550
 other                   453
 ```
 
+Ball-size distribution in the accepted selection:
+
+```text
+tiny    186
+small   824
+medium  499
+large  1122
+none    569
+```
+
 Outputs:
 
 ```text
@@ -253,8 +261,6 @@ runs/dataset_analysis/basketball_game_detections/
 ```
 
 ## 7. Stage the refined selection
-
-Import only the refined selection into a staging area:
 
 ```bash
 python3 scripts/import_basketball_game_detections.py \
@@ -271,20 +277,24 @@ local_data/bgd_import/sources/bgd_training_pool/
 └── source.json
 ```
 
-`bgd_training_pool` is intentionally training-only while original source/game grouping remains unknown.
+## 8. Final BGD QA: optional gate
 
-## 8. Final BGD QA
+There are two supported finalization paths.
 
-Prepare the final stratified QA sample from staged data:
+### Path A — with final QA
+
+Use this when you want a final stratified manual sample before promoting staged BGD:
 
 ```bash
 python3 scripts/prepare_bgd_review.py
 python3 scripts/review_labels.py bgd_qa
+python3 scripts/summarize_review.py bgd_qa
+python3 scripts/finalize_bgd.py
 ```
 
-Default sample size: **320 frames**.
+Default sample size is 320 frames. Every row must finish as `already_correct` or `corrected` before normal finalization.
 
-Do **not** add backboard boxes during this BGD QA. Review only the classes natively supplied/mapped by this source:
+Do not add `backboard` labels to BGD QA. The source's native/mapped classes are:
 
 ```text
 basketball
@@ -293,41 +303,54 @@ referee
 rim
 ```
 
-After review, summarize it:
-
-```bash
-python3 scripts/summarize_review.py bgd_qa
-```
-
-If the QA exposes a systematic problem, stop and inspect it before finalizing. You can create a larger sample if needed:
+If you need a larger QA sample:
 
 ```bash
 python3 scripts/prepare_bgd_review.py --sample-size 600 --force
 python3 scripts/review_labels.py bgd_qa
-python3 scripts/summarize_review.py bgd_qa
 ```
 
-Every final QA row must end as `already_correct` or `corrected` before finalization.
+### Path B — deliberately skip final QA
 
-## 9. Finalize BGD into curated sources
-
-When final QA is acceptable:
+Use this only when the source has already been qualified and you intentionally accept the staged labels as-is:
 
 ```bash
-python3 scripts/finalize_bgd.py
+python3 scripts/finalize_bgd.py --skip-qa
 ```
 
-This copies the staged BGD source into:
+This mode:
+
+- does not require a completed `bgd_qa` batch;
+- does not apply unreviewed QA edits;
+- promotes staged BGD labels directly;
+- marks the source manifest with `review_status = qa_skipped_source`;
+- keeps BGD restricted to its native/mapped classes.
+
+The current v1.2.0 run used **Path B** after the diagnostic qualification step.
+
+Expected successful output is approximately:
+
+```text
+Frames exported: 3200
+Final QA skipped: yes
+QA-reviewed labels applied: 0
+```
+
+Final curated source:
 
 ```text
 local_data/sources/bgd_training_pool/
 ```
 
-Reviewed corrections are applied only for the native BGD classes. Backboard labels are stripped from BGD during finalization so the source remains internally consistent.
+## 9. Current v1.2.0 dataset budget
 
-## 10. STOP: choose the v1.2.0 dataset cap
+The active project hard cap is now:
 
-At this point the expected curated volume is approximately:
+```text
+6000 images after deduplication
+```
+
+Expected pre-global-dedup volume for the current run is approximately:
 
 ```text
 existing curated/E-BARD   ~1796
@@ -336,49 +359,47 @@ BGD refined selection     +3200
 before global dedup       ~4996
 ```
 
-The repository still enforces the v1.1.0 **4,000-image hard cap** in the builder/training path.
+This fits deliberately below the 6,000-image safety ceiling.
 
-**Do not run the final build for v1.2.0 until the cap has been explicitly changed and documented.**
+## 10. Build and audit
 
-The intended v1.2.0 policy is to allow deliberate growth while retaining a hard safety ceiling; the exact new ceiling must be chosen explicitly before editing the configuration/code.
-
-## 11. Build and audit the final dataset
-
-Only after the v1.2.0 cap has been approved and updated:
+After curated sources are ready:
 
 ```bash
 python3 scripts/build_dataset.py --force
 python3 scripts/audit_dataset.py
 ```
 
-The build must:
+The builder must:
 
-- keep proven sources together;
-- force `bgd_training_pool` to train only;
-- preserve protected evaluation sources;
+- preserve explicit/protected source roles;
+- keep `bgd_training_pool` in train only;
 - remove exact/near duplicates globally;
+- keep complete proven sources together;
 - target roughly 70/15/15 where source constraints allow;
-- pass the dataset audit before training.
+- refuse a final dataset above 6,000 images.
 
 Do not train if the audit fails.
 
-## 12. Train v1.2.0
+## 11. Train v1.2.0
 
-Initialize from the currently promoted model unless the experiment explicitly says otherwise:
+Once tests and dataset audit pass:
 
 ```bash
 python3 training/train.py --version 1.2.0 --init promoted
 ```
 
-Expected output:
+Expected candidate checkpoint:
 
 ```text
 runs/detect/model_v1.2.0_promoted/weights/best.pt
 ```
 
+The training command independently re-checks the dataset image budget before starting.
+
 Training a candidate does not promote it automatically.
 
-## 13. Evaluate v1.2.0
+## 12. Evaluate v1.2.0
 
 Validation:
 
@@ -406,11 +427,35 @@ python3 evaluation/compare_models.py \
 
 Promotion priorities:
 
-- `basketball`: precision is critical; do not accept a major false-positive regression;
-- `basketball`: operational recall must also be checked because static mAP alone was misleading for v1.1.0;
+- `basketball`: precision is critical; avoid a major false-positive regression;
+- `basketball`: also measure operational recall, because static mAP alone was misleading for v1.1.0;
 - `player`: recall must not materially regress;
 - `rim`: recall must not materially regress;
 - compare temporal/tracking behaviour on representative real videos as well as static metrics.
+
+The held-out test must not be used to tune training parameters or thresholds.
+
+## 13. Current run status / resume point
+
+For the current v1.2.0 preparation, BGD has already been finalized into curated sources with:
+
+```bash
+python3 scripts/finalize_bgd.py --skip-qa
+```
+
+and the active dataset cap has been raised to 6,000.
+
+Therefore, after pulling the latest `main`, the current resume sequence is:
+
+```bash
+git pull origin main
+python3 -m unittest discover -s tests -v
+python3 scripts/build_dataset.py --force
+python3 scripts/audit_dataset.py
+python3 training/train.py --version 1.2.0 --init promoted
+```
+
+Only run the training command if tests and audit pass.
 
 ## 14. Generic workflow for adding your own source
 
@@ -431,7 +476,7 @@ python3 scripts/autolabel.py \
   --skip-copy
 ```
 
-Prepare and review that source only:
+Prepare/review that source:
 
 ```bash
 python3 scripts/prepare_review.py \
@@ -449,11 +494,21 @@ Export approved rows:
 python3 scripts/export_reviewed.py game_01_review
 ```
 
-Only `already_correct` and `corrected` rows are eligible for curated data. `skip` and `uncertain` are excluded.
+Only `already_correct` and `corrected` rows are eligible. `skip` and `uncertain` are excluded.
+
+Normal collection guidance remains sparse by design:
+
+```text
+sampling: ~1 frame/second
+normal default: 120 frames/source
+normal maximum: 200 frames/source
+```
+
+Prefer adding a new independent source over oversampling one video.
 
 ## 15. Protected gold test
 
-The first protected source is:
+Protected source:
 
 ```text
 source id: OwiQgAMqyUs
@@ -472,13 +527,23 @@ python3 scripts/collect_video_frames.py \
   --purpose evaluation
 ```
 
-The gold test must never be used for training, threshold tuning or training-oriented hard-case mining.
+The gold test must never be used for training, training-oriented hard-case mining or threshold tuning.
 
-# Historical v1.1.0 policy
+# Lessons carried forward from v1.1.0
 
-The v1.1.0 dataset policy used a maximum of **4,000 images after deduplication** and source-aware 70/15/15 splitting. That ceiling remains enforced by current builder/training code until the v1.2.0 policy is explicitly adopted.
+The v1.1.0 data policy used a 4,000-image ceiling. v1.2.0 deliberately increases that ceiling to **6,000** to accommodate a larger, still-curated dataset.
 
-The v1.1.0 candidate clearly improved the supervised static benchmark versus v1.0.0, but did not automatically improve the P1 temporal pipeline at the previously tuned threshold. Therefore v1.2.0 evaluation must include both static detection metrics and operational/temporal behaviour.
+The v1.1.0 candidate clearly improved the supervised static benchmark versus v1.0.0, but did not automatically improve the P1 temporal pipeline at the previously tuned threshold. Therefore a candidate is not considered better based on global mAP alone.
+
+For future external datasets:
+
+- do not trust external train/val/test splits when original source grouping is unknown;
+- do not assume filename patterns prove game identity;
+- qualify surprising model-FN/FP populations before using them as hard cases;
+- distinguish reviewer status changes from meaningful geometry/class changes;
+- do not partially enrich a class that is absent from the rest of the source;
+- keep high-value hard cases balanced so one bucket does not dominate the training set;
+- keep a hard dataset-size ceiling even when deliberately increasing data volume.
 
 # Tests and CI
 
