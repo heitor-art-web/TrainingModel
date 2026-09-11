@@ -228,6 +228,35 @@ python3 scripts/finalize_ebard.py
 
 If the sample shows systematic errors, increase the review sample before finalizing. See [`EBARD_GUIDE.md`](EBARD_GUIDE.md) for the full E-BARD workflow.
 
+#### Basketball Game Detections (planned v1.2.0 source)
+
+TrainingModel plans to use the **Basketball Game Detections Dataset** published by **FirstTime** on Roboflow Universe:
+
+- Source: https://universe.roboflow.com/firsttime/basketball-game-detections
+- Publisher/host: Roboflow Universe
+- Dataset author/attribution: FirstTime
+- License declared by the dataset page: **CC BY 4.0 (Creative Commons Attribution 4.0 International)**
+- License text: https://creativecommons.org/licenses/by/4.0/
+
+Under CC BY 4.0, appropriate attribution must be retained, the license must be identified/linked, and modifications to the licensed material must be indicated when the material is shared. This repository does not claim that the dataset license resolves every possible third-party right in the underlying imagery; users remain responsible for checking whether their intended use requires additional permissions.
+
+TrainingModel adapts the source annotations to its canonical class schema as follows:
+
+| Basketball Game Detections | TrainingModel | Treatment |
+| --- | --- | --- |
+| `Ball` | `basketball` (0) | remapped |
+| `Player` | `player` (1) | remapped |
+| `Ref` | `referee` (2) | remapped |
+| `Hoop` | `rim` (4) | remapped; `rim` is the canonical project class |
+| `FG Attempt` | — | ignored |
+| `FG Made` | — | ignored |
+
+`backboard` (class 3) is not provided by this source and must not be invented from the `Hoop` annotation. Any later backboard enrichment must be documented separately as a TrainingModel modification/pre-annotation step.
+
+When this dataset is imported, provenance should be preserved in source metadata/manifests, including at minimum the dataset name, author, source URL, CC BY 4.0 license, class remapping, ignored classes, and the fact that annotations were converted into TrainingModel's YOLO/source structure.
+
+Do not automatically ingest every exported image. Prefer original/non-augmented images where available, preserve source/game grouping when recoverable, remove exact/near duplicates, and run a dataset-specific QA sample before admitting the selected subset to `local_data/sources/`.
+
 ### 5. Build and audit the final dataset
 
 Once approved sources are under `local_data/sources/`:
