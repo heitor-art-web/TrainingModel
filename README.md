@@ -255,20 +255,21 @@ TrainingModel adapts the source annotations to its canonical class schema as fol
 
 When this dataset is imported, provenance is preserved in source metadata/manifests, including the dataset name, author, source URL, CC BY 4.0 license, class remapping, ignored classes, and the fact that annotations were converted into TrainingModel's YOLO/source structure.
 
-Do not automatically ingest every exported image. Prefer original/non-augmented images where available, preserve source/game grouping when recoverable, remove exact/near duplicates, and run a dataset-specific QA sample before admitting the selected subset to `local_data/sources/`.
+Do not automatically ingest every exported image. Prefer original/non-augmented images where available, preserve source/game grouping when recoverable, remove exact/near duplicates, and run dataset-specific QA before admitting the selected subset to `local_data/sources/`.
 
 ##### Basketball Game Detections qualification workflow
 
-Export/download the dataset in YOLO format and unpack it under:
+The dataset location is configurable. For example, the current Roboflow YOLO26 export can live at:
 
 ```text
-local_data/external/basketball_game_detections/
+local_data/Basketball Game Detections.v9i.yolo26/
 ```
 
-First analyze the whole external dataset without modifying the curated training sources:
+First analyze the whole external dataset without modifying curated training sources:
 
 ```bash
-python3 scripts/analyze_basketball_game_detections.py
+python3 scripts/analyze_basketball_game_detections.py \
+  --input "local_data/Basketball Game Detections.v9i.yolo26"
 ```
 
 By default the analyzer uses the v1.1.0 candidate checkpoint at:
@@ -277,7 +278,7 @@ By default the analyzer uses the v1.1.0 candidate checkpoint at:
 runs/detect/model_v1.1.0_promoted/weights/best.pt
 ```
 
-and selects up to 3,500 useful images. It reports exact/near duplicates, ball-size buckets (`tiny`, `small`, `medium`, `large`), frames where v1.1.0 misses a labelled ball, frames where it predicts a ball but the source label has none, no-ball hard negatives, `ball + rim` context and general diversity.
+The analysis scans labels, removes exact/near duplicates, creates ball-size buckets (`tiny`, `small`, `medium`, `large`), and records frames where v1.1.0 misses a labelled ball or predicts a ball where the source label has none. It also records no-ball hard negatives, `ball + rim` context and general diversity.
 
 Reports are written to:
 
@@ -288,29 +289,78 @@ runs/dataset_analysis/basketball_game_detections/
 └── analysis_summary.json
 ```
 
-To change the selection size:
+`selected_manifest.csv` is only the analyzer's first-pass selection. For v1.2.0, do not import it directly when the model-FN population is unusually large.
+
+###### Pre-import diagnostic QA
+
+Validate the surprising `model_fn` population before importing anything. This step reuses `analysis_manifest.csv`; it does **not** rerun YOLO inference:
 
 ```bash
-python3 scripts/analyze_basketball_game_detections.py \
-  --max-select 3000 \
-  --force
+python3 scripts/prepare_bgd_analysis_qa.py \
+  --input "local_data/Basketball Game Detections.v9i.yolo26"
+
+python3 scripts/review_labels.py bgd_model_fn_diagnostic
 ```
 
-Roboflow filenames are not treated as proof of original game identity. If the downloaded filenames/metadata contain a reliable game/video identifier, explicitly provide a regex with a `source` capture group, for example:
+The default diagnostic batch contains 160 frames, weighted toward model false negatives and including model-hit, false-positive and clean no-ball controls. The source labels are remapped into TrainingModel classes before review.
+
+This batch is **diagnostic only**. Do not run `export_reviewed.py` on it and do not add it to `local_data/sources/`. Its purpose is to answer: are the source labels trustworthy enough that the very large `model_fn` count represents real v1.1.0 misses rather than annotation problems?
+
+If most sampled `model_fn` rows are `already_correct`, the misses are credible hard cases. If many need correction, investigate the external labels before continuing.
+
+###### Refine the v1.2.0 selection without rerunning inference
+
+Once the diagnostic QA looks trustworthy, create the balanced v1.2.0 selection from the existing analysis manifest:
+
+```bash
+python3 scripts/refine_bgd_selection.py --force
+```
+
+Default target is 3,200 images. The selector deliberately prevents `model_fn` from dominating the dataset and targets a mix of approximately:
+
+```text
+tiny_ball              180
+small_ball             420
+model_fn              1050
+model_fp               300
+no_ball_hard_negative  350
+ball_and_rim           550
+other                  350
+```
+
+Quotas are ceilings/targets, not promises: if a bucket has fewer usable unique images, remaining capacity is filled from other diverse non-duplicate images.
+
+Outputs:
+
+```text
+runs/dataset_analysis/basketball_game_detections/
+├── refined_selection_manifest.csv
+└── refined_selection_summary.json
+```
+
+This refinement reads the previous CSV only, so it is fast and does not perform model inference again.
+
+Roboflow filenames are not treated as proof of original game identity. If downloaded filenames/metadata contain a reliable game/video identifier, explicitly provide a regex with a `source` capture group during the original analysis, for example:
 
 ```bash
 python3 scripts/analyze_basketball_game_detections.py \
+  --input "local_data/Basketball Game Detections.v9i.yolo26" \
   --source-regex '^(?P<source>game_[0-9]+)_frame_[0-9]+' \
   --force
 ```
 
 Only use such a regex when the captured value really identifies an original independent game/video. Otherwise leave grouping unknown. Unknown grouping is deliberately imported as a **training-only** source so this external dataset cannot leak into validation/test.
 
-After inspecting `analysis_summary.json` and `selected_manifest.csv`, stage only the selected images:
+###### Stage the refined selection
+
+After reviewing `refined_selection_summary.json`, stage only the refined images:
 
 ```bash
-python3 scripts/import_basketball_game_detections.py
+python3 scripts/import_basketball_game_detections.py \
+  --input "local_data/Basketball Game Detections.v9i.yolo26"
 ```
+
+The importer now uses `refined_selection_manifest.csv` by default.
 
 Default staging output:
 
@@ -322,10 +372,13 @@ If reliable source groups were proven during analysis, import them separately wi
 
 ```bash
 python3 scripts/import_basketball_game_detections.py \
+  --input "local_data/Basketball Game Detections.v9i.yolo26" \
   --use-proven-source-groups
 ```
 
-Before the staged data becomes eligible for training, create a stratified QA sample. The default is 320 frames spread across current-model false negatives, false positives, tiny/small-ball cases, no-ball hard negatives, `ball + rim` and general examples:
+###### Final staged-data QA
+
+Before staged data becomes eligible for training, create a stratified QA sample. The default is 320 frames spread across current-model false negatives, false positives, tiny/small-ball cases, no-ball hard negatives, `ball + rim` and general examples:
 
 ```bash
 python3 scripts/prepare_bgd_review.py
@@ -345,9 +398,9 @@ When the QA sample is clean:
 python3 scripts/finalize_bgd.py
 ```
 
-This copies the staged selected dataset into `local_data/sources/`, applying the manually corrected labels to sampled frames and retaining provenance for all imported frames. `bgd_training_pool` is explicitly registered with `role = "train"` in `configs/data_sources.toml` while original game grouping remains unknown.
+This copies the staged selected dataset into `local_data/sources/`, applying manually corrected labels to sampled frames and retaining provenance for all imported frames. `bgd_training_pool` is explicitly registered with `role = "train"` in `configs/data_sources.toml` while original game grouping remains unknown.
 
-The current 4,000-image hard cap belongs to the v1.1.0 policy. **Do not silently raise it.** Decide the v1.2.0 dataset budget explicitly after inspecting the Basketball Game Detections analysis report, then update the configured cap before building/training v1.2.0.
+The current 4,000-image hard cap belongs to the v1.1.0 policy. **Do not silently raise it.** Decide the v1.2.0 dataset budget explicitly after inspecting the Basketball Game Detections analysis/refined-selection reports, then update the configured cap before building/training v1.2.0.
 
 ### 5. Build and audit the final dataset
 
