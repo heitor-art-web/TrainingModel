@@ -13,13 +13,22 @@ NATIVE_CLASS_IDS = {0, 1, 2, 4}  # basketball, player, referee, rim
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Promote staged Basketball Game Detections sources into local_data/sources "
-            "after the QA sample has been fully reviewed."
+            "Promote staged Basketball Game Detections sources into local_data/sources. "
+            "By default the final QA sample must be fully reviewed; --skip-qa explicitly "
+            "promotes the staged labels without applying a final review batch."
         )
     )
     parser.add_argument("--root", default="local_data/bgd_import/sources")
     parser.add_argument("--batch", default="bgd_qa")
     parser.add_argument("--destination-root", default="local_data/sources")
+    parser.add_argument(
+        "--skip-qa",
+        action="store_true",
+        help=(
+            "Explicitly skip the final BGD QA gate and promote staged labels as-is. "
+            "No reviewed labels are applied."
+        ),
+    )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -63,35 +72,44 @@ def main() -> None:
 
     if not root.exists():
         raise FileNotFoundError(f"Basketball Game Detections staging root not found: {root}")
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"Basketball Game Detections QA batch not found: {manifest_path}")
 
-    with manifest_path.open("r", encoding="utf-8", newline="") as file:
-        review_rows = list(csv.DictReader(file))
-    if not review_rows:
-        raise ValueError("Basketball Game Detections QA batch is empty.")
-
-    pending = [row for row in review_rows if row.get("review_status") not in APPROVED]
-    if pending:
-        states = sorted({row.get("review_status", "") or "unreviewed" for row in pending})
-        raise ValueError(
-            "Basketball Game Detections cannot be finalized until every QA sample is "
-            "corrected or already_correct. "
-            f"Outstanding states: {states}"
-        )
-
+    review_rows: list[dict] = []
     reviewed_labels: dict[tuple[str, str], Path] = {}
     review_statuses: dict[tuple[str, str], str] = {}
-    for row in review_rows:
-        source_id = row["source_id"]
-        batch_name = row["image"]
-        prefix = f"{source_id}__"
-        if not batch_name.startswith(prefix):
-            raise ValueError(f"Unexpected Basketball Game Detections QA filename: {batch_name}")
-        original_name = batch_name[len(prefix) :]
-        key = (source_id, Path(original_name).stem)
-        reviewed_labels[key] = batch_dir / row["label_reviewed"]
-        review_statuses[key] = row["review_status"]
+
+    if not args.skip_qa:
+        if not manifest_path.exists():
+            raise FileNotFoundError(
+                f"Basketball Game Detections QA batch not found: {manifest_path}. "
+                "Run the QA workflow or explicitly pass --skip-qa."
+            )
+
+        with manifest_path.open("r", encoding="utf-8", newline="") as file:
+            review_rows = list(csv.DictReader(file))
+        if not review_rows:
+            raise ValueError("Basketball Game Detections QA batch is empty.")
+
+        pending = [row for row in review_rows if row.get("review_status") not in APPROVED]
+        if pending:
+            states = sorted({row.get("review_status", "") or "unreviewed" for row in pending})
+            raise ValueError(
+                "Basketball Game Detections cannot be finalized until every QA sample is "
+                "corrected or already_correct. "
+                f"Outstanding states: {states}. "
+                "If you intentionally want to promote staged labels without final QA, "
+                "rerun with --skip-qa."
+            )
+
+        for row in review_rows:
+            source_id = row["source_id"]
+            batch_name = row["image"]
+            prefix = f"{source_id}__"
+            if not batch_name.startswith(prefix):
+                raise ValueError(f"Unexpected Basketball Game Detections QA filename: {batch_name}")
+            original_name = batch_name[len(prefix) :]
+            key = (source_id, Path(original_name).stem)
+            reviewed_labels[key] = batch_dir / row["label_reviewed"]
+            review_statuses[key] = row["review_status"]
 
     destination_root.mkdir(parents=True, exist_ok=True)
     exported = 0
@@ -136,25 +154,36 @@ def main() -> None:
             shutil.copy2(image_path, images_out / image_path.name)
             output_label = labels_out / f"{image_path.stem}.txt"
             if review_label is not None:
-                raw_lines = [line for line in review_label.read_text(encoding="utf-8").splitlines() if line.strip()]
+                raw_lines = [
+                    line
+                    for line in review_label.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
                 native_text = native_label_text(review_label)
                 native_lines = [line for line in native_text.splitlines() if line.strip()]
                 removed_backboard_boxes += len(raw_lines) - len(native_lines)
                 output_label.write_text(native_text, encoding="utf-8")
             else:
+                # Staged BGD labels already contain only the mapped native classes.
+                # In --skip-qa mode they are intentionally promoted unchanged.
                 shutil.copy2(source_label, output_label)
             reviewed_applied += int(review_label is not None)
 
             source_row = staged_rows.get(image_path.name, {})
+            if args.skip_qa:
+                final_review_status = "qa_skipped_source"
+            elif review_label is not None:
+                final_review_status = review_statuses[key]
+            else:
+                final_review_status = "qa_sampled_source"
+
             manifest_rows.append(
                 {
                     **source_row,
                     "image": image_path.name,
                     "source_id": source_dir.name,
                     "label": f"labels/{image_path.stem}.txt",
-                    "review_status": (
-                        review_statuses[key] if review_label is not None else "qa_sampled_source"
-                    ),
+                    "review_status": final_review_status,
                 }
             )
             exported += 1
@@ -172,6 +201,7 @@ def main() -> None:
 
     print("Basketball Game Detections finalized into curated sources.")
     print(f"Frames exported: {exported}")
+    print(f"Final QA skipped: {'yes' if args.skip_qa else 'no'}")
     print(f"QA-reviewed labels applied: {reviewed_applied}")
     print(f"Non-native backboard boxes excluded from QA labels: {removed_backboard_boxes}")
     print(f"Destination: {destination_root}")
