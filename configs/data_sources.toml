@@ -11,6 +11,7 @@ near_duplicate_hamming = 4
 # v1.1.0 is intentionally a compact, curated dataset. 4000 is a hard ceiling,
 # not a target. Normal video collection defaults to ~120 frames per source so
 # hard cases and manually selected examples still have room in the budget.
+# The v1.2.0 image budget must be decided explicitly before building that dataset.
 [collection]
 max_dataset_images = 4000
 default_sample_fps = 1.0
@@ -27,3 +28,15 @@ start_seconds = 0.0
 end_seconds = 60.0
 allow_training = false
 allow_hard_case_training = false
+
+# Basketball Game Detections (FirstTime / Roboflow Universe), CC BY 4.0.
+# Until original game/video identities are proven, all selected frames are kept
+# in one training-only pool so they cannot leak into validation or test.
+[[sources]]
+id = "bgd_training_pool"
+kind = "external_dataset"
+reference = "https://universe.roboflow.com/firsttime/basketball-game-detections"
+description = "Curated Basketball Game Detections images with unknown original game grouping."
+role = "train"
+allow_training = true
+allow_hard_case_training = true
