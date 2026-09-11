@@ -9,7 +9,7 @@ import tomllib
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALID_SPLITS = ("train", "val", "test")
 RESERVED_TEST_ROLES = {"test", "gold_test"}
-PROJECT_DATASET_IMAGE_CAP = 4000
+PROJECT_DATASET_IMAGE_CAP = 6000
 
 
 @dataclass(frozen=True)
