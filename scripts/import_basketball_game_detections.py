@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Import only the images selected by analyze_basketball_game_detections.py "
-            "into TrainingModel curated sources."
+            "into a staging area for QA before final curation."
         )
     )
     parser.add_argument(
@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
         "--selection",
         default="runs/dataset_analysis/basketball_game_detections/selected_manifest.csv",
     )
-    parser.add_argument("--output", default="local_data/sources")
+    parser.add_argument("--output", default="local_data/bgd_import/sources")
     parser.add_argument(
         "--source-id",
         default="bgd_training_pool",
@@ -130,7 +130,7 @@ def main() -> None:
     existing = [output_root / source_id for source_id in rows_by_source if (output_root / source_id).exists()]
     if existing and not args.force:
         raise FileExistsError(
-            "Curated source already exists: "
+            "Staged source already exists: "
             + ", ".join(str(path) for path in existing)
             + ". Use --force to replace only these Basketball Game Detections sources."
         )
@@ -214,23 +214,25 @@ def main() -> None:
                 "TrainingModel canonicalizes Hoop as rim. Backboard is not natively "
                 "annotated by this dataset. Selected data was transformed/remapped "
                 "from the original dataset; original upstream content is not redistributed "
-                "by this Git repository."
+                "by this Git repository. This directory is staging and must pass QA before "
+                "finalization into local_data/sources/."
             ),
         }
         (source_dir / "source.json").write_text(
             json.dumps(source_json, indent=2), encoding="utf-8"
         )
 
-    print("Basketball Game Detections import complete.")
-    print(f"Selected images imported: {total_images}")
-    print(f"Curated sources created: {len(rows_by_source)}")
+    print("Basketball Game Detections staging import complete.")
+    print(f"Selected images staged: {total_images}")
+    print(f"Staged sources created: {len(rows_by_source)}")
     print(f"Class instances: {class_counts}")
     if not args.use_proven_source_groups:
         print(
-            "Import mode: training-only pool. Keep bgd_training_pool registered with "
+            "Import mode: training-only pool. bgd_training_pool is registered with "
             "role=train to prevent external-source leakage into validation/test."
         )
-    print(f"Destination: {output_root}")
+    print(f"Staging destination: {output_root}")
+    print("Next: prepare and review a Basketball Game Detections QA sample.")
 
 
 if __name__ == "__main__":
